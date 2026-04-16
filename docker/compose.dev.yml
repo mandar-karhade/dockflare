@@ -1,0 +1,57 @@
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      SERVICES: 0
+      TASKS: 0
+      INFO: 1
+      EVENTS: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - internal
+
+  manager:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    environment:
+      TM_DEBUG: "true"
+      TM_DB_PATH: /app/data/tm.db
+      TM_DOCKER_HOST: tcp://socket-proxy:2375
+      TM_MASTER_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+      TM_CORS_ORIGINS: '["http://localhost:5173","http://localhost:8088"]'
+    volumes:
+      - ../backend/app:/app/app
+      - ../backend/alembic:/app/alembic
+      - ../backend/alembic.ini:/app/alembic.ini
+      - dev-data:/app/data
+    depends_on:
+      - socket-proxy
+    networks:
+      - internal
+
+  # Sample app for testing tunnels
+  sample-app:
+    image: nginx:alpine
+    labels:
+      com.docker.compose.project: sample
+      com.docker.compose.service: web
+    networks:
+      - sample-net
+
+volumes:
+  dev-data:
+
+networks:
+  internal:
+    driver: bridge
+  sample-net:
+    driver: bridge

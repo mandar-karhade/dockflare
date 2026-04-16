@@ -1,0 +1,538 @@
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "./api/client";
+import { useState } from "react";
+
+// ---- Types ----
+
+interface ContainerEntry {
+  container_id: string;
+  name: string;
+  service: string | null;
+  image: string;
+  status: string;
+  ports: number[];
+  networks: string[];
+  is_cloudflared: boolean;
+  hostname: string | null;
+  target_service_url: string | null;
+  tunnel_name: string | null;
+  tunnel_id: string | null;
+}
+
+interface ProjectTunnel {
+  tunnel_id: string;
+  name: string;
+  status: string;
+  connections: number;
+  machine: string;
+  route_count: number;
+}
+
+interface Project {
+  project: string;
+  networks: string[];
+  containers: ContainerEntry[];
+  tunnel: ProjectTunnel | null;
+}
+
+interface TunnelRoute {
+  hostname: string;
+  service: string;
+  path: string | null;
+}
+
+interface TunnelInfo {
+  tunnel_id: string;
+  name: string;
+  status: string;
+  connections: number;
+  is_local: boolean;
+  machine: string;
+  origin_ip: string | null;
+  routes: TunnelRoute[];
+  sidecar: { name: string; project: string | null; networks: string[]; status: string } | null;
+}
+
+interface DashboardResponse {
+  projects: Project[];
+  standalone: ContainerEntry[];
+  tunnels: TunnelInfo[];
+  machines: Record<string, number>;
+  local_ip: string | null;
+  total_tunnels: number;
+  total_projects: number;
+}
+
+interface ZonesResponse {
+  zones: { zone_id: string; zone_name: string; status: string; plan: string }[];
+  total: number;
+}
+
+interface ExportedConfig {
+  version: number;
+  tunnel_name: string;
+  tunnel_id: string;
+  exported_at: string;
+  ingress: Record<string, unknown>[];
+}
+
+// Container types for service picker
+interface ContainersResponse {
+  projects: Record<string, { compose_service: string | null; name: string; exposed_ports: number[]; status: string; is_cloudflared: boolean }[]>;
+}
+
+type Tab = "dashboard" | "tunnels" | "zones";
+
+// ---- Components ----
+
+const Dot = ({ color }: { color: string }) => <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${color}`} />;
+const StatusDot = ({ status }: { status: string }) => {
+  const c = status === "running" || status === "connected" || status === "active" ? "bg-green-500" : status === "exited" || status === "disconnected" ? "bg-red-400" : "bg-yellow-400";
+  return <Dot color={c} />;
+};
+
+const Modal = ({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) => {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">X</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+};
+
+const Btn = ({ children, onClick, variant = "default", disabled }: {
+  children: React.ReactNode; onClick?: () => void; variant?: "default" | "primary" | "danger" | "ghost"; disabled?: boolean;
+}) => {
+  const v = { default: "border hover:bg-muted", primary: "bg-primary text-primary-foreground hover:bg-primary/90", danger: "text-red-500 hover:bg-red-50 dark:hover:bg-red-950 border-transparent", ghost: "text-primary hover:bg-primary/10 border-transparent" }[variant];
+  return <button onClick={onClick} disabled={disabled} className={`rounded border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${v}`}>{children}</button>;
+};
+
+// ---- Service Picker ----
+
+const useServiceOptions = () => {
+  const { data } = useQuery({ queryKey: ["containers"], queryFn: () => apiFetch<ContainersResponse>("/containers"), staleTime: 60_000 });
+  if (!data) return [];
+  const opts: { label: string; value: string; project: string; service: string }[] = [];
+  for (const [project, containers] of Object.entries(data.projects)) {
+    for (const c of containers) {
+      if (c.is_cloudflared || c.status !== "running") continue;
+      const svc = c.compose_service ?? c.name;
+      for (const port of c.exposed_ports.length > 0 ? c.exposed_ports : [0]) {
+        opts.push({ label: port ? `${project}/${svc}:${String(port)}` : `${project}/${svc}`, value: port ? `http://${svc}:${String(port)}` : `http://${svc}`, project, service: svc });
+      }
+    }
+  }
+  return opts;
+};
+
+const ServicePicker = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => {
+  const options = useServiceOptions();
+  const [open, setOpen] = useState(false);
+  const grouped: Record<string, typeof options> = {};
+  for (const o of options) (grouped[o.project] ??= []).push(o);
+  return (
+    <div className="relative">
+      <input value={value} onChange={(e) => onChange(e.target.value)} onFocus={() => setOpen(true)} placeholder="http://service:port" className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" />
+      {open && options.length > 0 && (
+        <div className="absolute left-0 top-full z-10 mt-1 max-h-48 w-72 overflow-y-auto rounded border bg-background shadow-lg">
+          {Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([proj, os]) => (
+            <div key={proj}>
+              <div className="sticky top-0 bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">{proj}</div>
+              {os.map((o, i) => (
+                <button key={`${o.value}-${String(i)}`} onClick={() => { onChange(o.value); setOpen(false); }} className="flex w-full gap-2 px-2 py-1 text-left text-xs hover:bg-muted/50">
+                  <span className="font-medium">{o.service}</span>
+                  <span className="ml-auto font-mono text-muted-foreground/60">{o.value}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+          <button onClick={() => setOpen(false)} className="w-full border-t px-2 py-1 text-[10px] text-muted-foreground">Close</button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ---- Ingress Editor ----
+
+const IngressEditor = ({ tunnelId, ingress }: { tunnelId: string; ingress: TunnelRoute[] }) => {
+  const qc = useQueryClient();
+  const [rules, setRules] = useState(ingress.map((r) => ({ hostname: r.hostname, service: r.service, path: r.path ?? "" })));
+  const save = useMutation({
+    mutationFn: (body: { hostname: string; service: string; path: string | null }[]) => apiFetch(`/tunnels/${tunnelId}/ingress`, { method: "PUT", body: JSON.stringify(body) }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); void qc.invalidateQueries({ queryKey: ["tunnels"] }); },
+  });
+  const update = (i: number, f: "hostname" | "service" | "path", v: string) => { const u = [...rules]; const r = u[i]; if (r) { r[f] = v; setRules(u); } };
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">Pick targets from Docker or type a URL. Catch-all added automatically.</p>
+      {rules.map((rule, i) => (
+        <div key={i} className="flex gap-2 rounded border bg-muted/30 p-2">
+          <div className="flex-1">
+            <label className="text-[10px] text-muted-foreground">Hostname</label>
+            <input value={rule.hostname} onChange={(e) => update(i, "hostname", e.target.value)} className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" />
+          </div>
+          <div className="flex-1">
+            <label className="text-[10px] text-muted-foreground">Target</label>
+            <ServicePicker value={rule.service} onChange={(v) => update(i, "service", v)} />
+          </div>
+          <div className="w-24">
+            <label className="text-[10px] text-muted-foreground">Path</label>
+            <input value={rule.path} onChange={(e) => update(i, "path", e.target.value)} className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" />
+          </div>
+          <div className="flex items-end"><Btn onClick={() => setRules(rules.filter((_, j) => j !== i))} variant="danger">X</Btn></div>
+        </div>
+      ))}
+      <div className="flex gap-2">
+        <Btn onClick={() => setRules([...rules, { hostname: "", service: "", path: "" }])}>+ Add Route</Btn>
+        <div className="flex-1" />
+        <Btn onClick={() => save.mutate(rules.filter((r) => r.hostname && r.service).map((r) => ({ hostname: r.hostname, service: r.service, path: r.path || null })))} disabled={save.isPending} variant="primary">{save.isPending ? "Saving..." : "Save to Cloudflare"}</Btn>
+      </div>
+    </div>
+  );
+};
+
+// ---- Modals ----
+
+const DeleteTunnelModal = ({ tunnelId, tunnelName, onClose, onConfirm, isPending }: { tunnelId: string; tunnelName: string; onClose: () => void; onConfirm: (id: string) => void; isPending: boolean }) => {
+  const [text, setText] = useState("");
+  return (
+    <Modal open={true} onClose={onClose} title="Delete Tunnel">
+      <p className="mb-2 text-sm text-muted-foreground">This will permanently delete the tunnel, DNS records, and sidecar.</p>
+      <p className="mb-3 text-sm">Type <span className="rounded bg-muted px-1.5 py-0.5 font-mono font-semibold">{tunnelName}</span> to confirm.</p>
+      <input value={text} onChange={(e) => setText(e.target.value)} placeholder={tunnelName} className="mb-4 w-full rounded border bg-background px-3 py-2 font-mono text-sm" autoFocus />
+      <div className="flex justify-end gap-2"><Btn onClick={onClose}>Cancel</Btn><Btn onClick={() => onConfirm(tunnelId)} disabled={text !== tunnelName || isPending} variant="primary">{isPending ? "Deleting..." : "Delete"}</Btn></div>
+    </Modal>
+  );
+};
+
+const ImportTunnelModal = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
+  const qc = useQueryClient();
+  const [json, setJson] = useState("");
+  const [sidecar, setSidecar] = useState(false);
+  const [project, setProject] = useState("");
+  const [service, setService] = useState("");
+  const [err, setErr] = useState("");
+  const mut = useMutation({ mutationFn: (body: unknown) => apiFetch("/tunnels/import", { method: "POST", body: JSON.stringify(body) }), onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); setJson(""); onClose(); } });
+  const go = () => { try { const p = JSON.parse(json) as ExportedConfig; if (!p.tunnel_name || !p.ingress) { setErr("Missing tunnel_name or ingress"); return; } setErr(""); mut.mutate({ tunnel_name: p.tunnel_name, ingress: p.ingress, spawn_sidecar: sidecar, ...(project ? { target_compose_project: project } : {}), ...(service ? { target_compose_service: service } : {}) }); } catch { setErr("Invalid JSON"); } };
+  return (
+    <Modal open={open} onClose={onClose} title="Import Tunnel Config">
+      <p className="mb-2 text-sm text-muted-foreground">Paste exported config to create a new tunnel with the same routes and a fresh token.</p>
+      <textarea value={json} onChange={(e) => setJson(e.target.value)} rows={6} placeholder="Paste JSON..." className="mb-3 w-full rounded border bg-background px-3 py-2 font-mono text-xs" />
+      <div className="mb-3 flex items-center gap-2"><input type="checkbox" id="imp-sc" checked={sidecar} onChange={(e) => setSidecar(e.target.checked)} /><label htmlFor="imp-sc" className="text-sm">Spawn sidecar</label></div>
+      {sidecar && <div className="mb-3 grid grid-cols-2 gap-2"><div><label className="text-xs">Project</label><input value={project} onChange={(e) => setProject(e.target.value)} className="w-full rounded border bg-background px-2 py-1 text-sm" /></div><div><label className="text-xs">Service</label><input value={service} onChange={(e) => setService(e.target.value)} className="w-full rounded border bg-background px-2 py-1 text-sm" /></div></div>}
+      {err && <p className="mb-2 text-xs text-destructive">{err}</p>}
+      <div className="flex justify-end gap-2"><Btn onClick={onClose}>Cancel</Btn><Btn onClick={go} disabled={!json || mut.isPending} variant="primary">{mut.isPending ? "Importing..." : "Import & Create"}</Btn></div>
+    </Modal>
+  );
+};
+
+const CreateTunnelModal = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
+  const qc = useQueryClient();
+  const [name, setName] = useState("");
+  const [project, setProject] = useState("");
+  const [service, setService] = useState("");
+  const mut = useMutation({ mutationFn: (b: { name: string; primary_compose_project?: string; primary_compose_service?: string }) => apiFetch("/tunnels", { method: "POST", body: JSON.stringify(b) }), onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); setName(""); onClose(); } });
+  return (
+    <Modal open={open} onClose={onClose} title="Create New Tunnel">
+      <div className="space-y-3">
+        <div><label className="mb-1 block text-sm font-medium">Name</label><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. my-project" className="w-full rounded border bg-background px-3 py-2 text-sm" /></div>
+        <div><label className="mb-1 block text-sm font-medium">Compose Project</label><input value={project} onChange={(e) => setProject(e.target.value)} className="w-full rounded border bg-background px-3 py-2 text-sm" /></div>
+        <div><label className="mb-1 block text-sm font-medium">Service</label><input value={service} onChange={(e) => setService(e.target.value)} className="w-full rounded border bg-background px-3 py-2 text-sm" /></div>
+        <div className="flex justify-end gap-2"><Btn onClick={onClose}>Cancel</Btn><Btn onClick={() => mut.mutate({ name, ...(project ? { primary_compose_project: project } : {}), ...(service ? { primary_compose_service: service } : {}) })} disabled={!name || mut.isPending} variant="primary">{mut.isPending ? "Creating..." : "Create"}</Btn></div>
+      </div>
+    </Modal>
+  );
+};
+
+// ---- Dashboard View ----
+
+const DashboardView = () => {
+  const qc = useQueryClient();
+  const { data, isLoading, error } = useQuery({ queryKey: ["dashboard"], queryFn: () => apiFetch<DashboardResponse>("/dashboard") });
+  const [filterMachine, setFilterMachine] = useState("all");
+  const [showCreate, setShowCreate] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [editingTunnel, setEditingTunnel] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const [confirmRecreate, setConfirmRecreate] = useState<string | null>(null);
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => apiFetch(`/tunnels/${id}`, { method: "DELETE" }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); setConfirmDelete(null); },
+  });
+
+  const recreateMut = useMutation({
+    mutationFn: (id: string) => apiFetch(`/tunnels/${id}/recreate`, { method: "POST" }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); setConfirmRecreate(null); },
+  });
+
+  const handleExport = async (tunnelId: string) => {
+    const config = await apiFetch<ExportedConfig>(`/tunnels/${tunnelId}/export`);
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `tunnel-${config.tunnel_name}.json`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (isLoading) return <p className="text-muted-foreground">Loading...</p>;
+  if (error) return <p className="text-destructive">Failed to load dashboard</p>;
+  if (!data) return null;
+
+  // Build flat rows: each container is a row, grouped by project
+  // Filter tunnels by machine, but show all projects (containers are always local)
+  const tunnelsByMachine = filterMachine === "all" ? data.tunnels : data.tunnels.filter((t) => t.machine === filterMachine);
+  const visibleTunnelIds = new Set(tunnelsByMachine.map((t) => t.tunnel_id));
+
+  return (
+    <div>
+      {/* Toolbar */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Btn onClick={() => setShowCreate(true)} variant="primary">New Tunnel</Btn>
+        <Btn onClick={() => setShowImport(true)}>Import</Btn>
+        <Btn onClick={() => void qc.invalidateQueries({ queryKey: ["dashboard"] })}>Refresh</Btn>
+        <div className="ml-auto flex gap-0.5 rounded-lg bg-muted p-0.5">
+          <button onClick={() => setFilterMachine("all")} className={`rounded px-2 py-1 text-xs font-medium ${filterMachine === "all" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>All ({data.total_tunnels})</button>
+          {Object.entries(data.machines).sort(([, a], [, b]) => b - a).map(([m, c]) => (
+            <button key={m} onClick={() => setFilterMachine(m)} className={`rounded px-2 py-1 text-xs font-medium ${filterMachine === m ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>{m === "unknown" ? "offline" : m} ({c})</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Main table */}
+      <div className="overflow-auto rounded-lg border" style={{ maxHeight: "calc(100vh - 120px)" }}>
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 z-10">
+            <tr className="border-b bg-muted text-left text-xs font-medium text-muted-foreground">
+              <th className="px-3 py-2 whitespace-nowrap">Tunnel</th>
+              <th className="px-3 py-2 whitespace-nowrap">Status</th>
+              <th className="px-3 py-2 whitespace-nowrap">Project</th>
+              <th className="px-3 py-2 whitespace-nowrap">Network</th>
+              <th className="px-3 py-2 whitespace-nowrap">Container</th>
+              <th className="px-3 py-2 whitespace-nowrap">Service</th>
+              <th className="px-3 py-2 whitespace-nowrap">Ports</th>
+              <th className="px-3 py-2 whitespace-nowrap">Hostname</th>
+              <th className="px-3 py-2 whitespace-nowrap">Target</th>
+              <th className="px-3 py-2 whitespace-nowrap">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {data.projects.sort((a, b) => a.project.localeCompare(b.project)).map((p) => {
+              const containers = p.containers.filter((c) => !c.is_cloudflared).sort((a, b) => (a.service ?? a.name).localeCompare(b.service ?? b.name));
+              const tunnel = p.tunnel;
+              const tunnelVisible = tunnel && visibleTunnelIds.has(tunnel.tunnel_id);
+              const rowCount = containers.length || 1;
+
+              return containers.map((c, idx) => (
+                <tr key={c.container_id} className={`hover:bg-muted/30 ${c.status !== "running" ? "opacity-50" : ""}`}>
+                  {idx === 0 && (
+                    <>
+                      {/* Tunnel */}
+                      <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
+                        {tunnel ? (
+                          <div>
+                            <span className="text-xs font-medium">{tunnel.name}</span>
+                            <div className="font-mono text-[10px] text-muted-foreground">{tunnel.machine !== "unknown" ? tunnel.machine : ""}</div>
+                          </div>
+                        ) : <span className="text-xs text-muted-foreground">-</span>}
+                      </td>
+                      {/* Status */}
+                      <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
+                        {tunnel ? (
+                          <div className="flex items-center gap-1.5">
+                            <StatusDot status={tunnel.status} />
+                            <span className="text-xs">{tunnel.status === "connected" ? `${String(tunnel.connections)} conn` : "offline"}</span>
+                          </div>
+                        ) : <span className="text-xs text-muted-foreground">-</span>}
+                      </td>
+                      {/* Project */}
+                      <td className="px-3 py-1.5 align-top font-medium whitespace-nowrap" rowSpan={rowCount}>
+                        {p.project}
+                      </td>
+                      {/* Network */}
+                      <td className="px-3 py-1.5 align-top font-mono text-xs text-muted-foreground whitespace-nowrap" rowSpan={rowCount}>
+                        {p.networks.join(", ") || "default"}
+                      </td>
+                    </>
+                  )}
+                  {/* Container */}
+                  <td className="px-3 py-1.5 whitespace-nowrap">
+                    <div className="flex items-center gap-1.5">
+                      <StatusDot status={c.status} />
+                      <span className="font-mono text-xs">{c.name}</span>
+                    </div>
+                  </td>
+                  {/* Service */}
+                  <td className="px-3 py-1.5 text-xs whitespace-nowrap">{c.service ?? "-"}</td>
+                  {/* Ports */}
+                  <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{c.ports.length > 0 ? c.ports.join(", ") : "-"}</td>
+                  {/* Hostname */}
+                  <td className="px-3 py-1.5 whitespace-nowrap">
+                    {c.hostname ? (
+                      <a href={`https://${c.hostname}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{c.hostname}</a>
+                    ) : <span className="text-xs text-muted-foreground">-</span>}
+                  </td>
+                  {/* Target */}
+                  <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{c.target_service_url ?? "-"}</td>
+                  {/* Actions */}
+                  {idx === 0 && (
+                    <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
+                      {tunnelVisible && tunnel ? (
+                        <div className="flex gap-1">
+                          <Btn onClick={() => setEditingTunnel(editingTunnel === tunnel.tunnel_id ? null : tunnel.tunnel_id)} variant="ghost">Edit</Btn>
+                          <Btn onClick={() => void handleExport(tunnel.tunnel_id)} variant="ghost">Export</Btn>
+                          <Btn onClick={() => setConfirmRecreate(tunnel.tunnel_id)} variant="ghost">Recreate</Btn>
+                          <Btn onClick={() => setConfirmDelete(tunnel.tunnel_id)} variant="danger">Delete</Btn>
+                        </div>
+                      ) : <span className="text-xs text-muted-foreground">-</span>}
+                    </td>
+                  )}
+                </tr>
+              ));
+            })}
+
+            {/* Unassociated tunnels (no local project) — column order: Tunnel, Status, Project, Network, Container, Service, Ports, Hostname, Target, Actions */}
+            {tunnelsByMachine.filter((t) => !data.projects.some((p) => p.tunnel?.tunnel_id === t.tunnel_id)).map((t) => {
+              const routes = t.routes;
+              const rs = Math.max(routes.length, 1);
+              if (routes.length === 0) {
+                return (
+                  <tr key={t.tunnel_id} className="hover:bg-muted/30 bg-muted/10">
+                    <td className="px-3 py-1.5 whitespace-nowrap"><span className="text-xs font-medium">{t.name}</span><div className="font-mono text-[10px] text-muted-foreground">{t.machine !== "unknown" ? t.machine : ""}</div></td>
+                    <td className="px-3 py-1.5"><div className="flex items-center gap-1.5"><StatusDot status={t.status} /><span className="text-xs">{t.status === "connected" ? `${String(t.connections)} conn` : "offline"}</span></div></td>
+                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
+                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
+                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
+                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
+                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
+                    <td className="px-3 py-1.5 text-xs italic text-muted-foreground">no routes</td>
+                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
+                    <td className="px-3 py-1.5 whitespace-nowrap">
+                      <div className="flex gap-1">
+                        <Btn onClick={() => setEditingTunnel(editingTunnel === t.tunnel_id ? null : t.tunnel_id)} variant="ghost">Edit</Btn>
+                        <Btn onClick={() => void handleExport(t.tunnel_id)} variant="ghost">Export</Btn>
+                        <Btn onClick={() => setConfirmRecreate(t.tunnel_id)} variant="ghost">Recreate</Btn>
+                        <Btn onClick={() => setConfirmDelete(t.tunnel_id)} variant="danger">Delete</Btn>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              }
+              return routes.map((r, idx) => (
+                <tr key={`${t.tunnel_id}-${String(idx)}`} className="hover:bg-muted/30 bg-muted/10">
+                  {idx === 0 && (
+                    <>
+                      <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}><span className="text-xs font-medium">{t.name}</span><div className="font-mono text-[10px] text-muted-foreground">{t.machine !== "unknown" ? t.machine : ""}</div></td>
+                      <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}><div className="flex items-center gap-1.5"><StatusDot status={t.status} /><span className="text-xs">{t.status === "connected" ? `${String(t.connections)} conn` : "offline"}</span></div></td>
+                      <td className="px-3 py-1.5 align-top text-xs text-muted-foreground" rowSpan={rs}>-</td>
+                      <td className="px-3 py-1.5 align-top text-xs text-muted-foreground" rowSpan={rs}>-</td>
+                    </>
+                  )}
+                  <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
+                  <td className="px-3 py-1.5 text-xs text-muted-foreground whitespace-nowrap">{r.service.replace("http://", "").replace("https://", "").split(":")[0]}</td>
+                  <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">{r.service.includes(":") ? r.service.split(":").pop()?.split("/")[0] : "-"}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap"><a href={`https://${r.hostname}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{r.hostname}</a></td>
+                  <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{r.service}</td>
+                  {idx === 0 && (
+                    <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}>
+                      <div className="flex gap-1">
+                        <Btn onClick={() => setEditingTunnel(editingTunnel === t.tunnel_id ? null : t.tunnel_id)} variant="ghost">Edit</Btn>
+                        <Btn onClick={() => void handleExport(t.tunnel_id)} variant="ghost">Export</Btn>
+                        <Btn onClick={() => setConfirmRecreate(t.tunnel_id)} variant="ghost">Recreate</Btn>
+                        <Btn onClick={() => setConfirmDelete(t.tunnel_id)} variant="danger">Delete</Btn>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ));
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Inline editor */}
+      {editingTunnel && (
+        <div className="mt-3 rounded-lg border p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Editing: {data.tunnels.find((t) => t.tunnel_id === editingTunnel)?.name}</h3>
+            <Btn onClick={() => setEditingTunnel(null)}>Close</Btn>
+          </div>
+          <IngressEditor tunnelId={editingTunnel} ingress={data.tunnels.find((t) => t.tunnel_id === editingTunnel)?.routes ?? []} />
+        </div>
+      )}
+
+      <CreateTunnelModal open={showCreate} onClose={() => setShowCreate(false)} />
+      <ImportTunnelModal open={showImport} onClose={() => setShowImport(false)} />
+      {confirmDelete !== null && (
+        <DeleteTunnelModal tunnelId={confirmDelete} tunnelName={data.tunnels.find((t) => t.tunnel_id === confirmDelete)?.name ?? ""} onClose={() => setConfirmDelete(null)} onConfirm={(id) => deleteMut.mutate(id)} isPending={deleteMut.isPending} />
+      )}
+      {confirmRecreate !== null && (
+        <Modal open={true} onClose={() => setConfirmRecreate(null)} title="Recreate Tunnel">
+          <p className="mb-2 text-sm text-muted-foreground">
+            This will delete <span className="font-semibold text-foreground">{data.tunnels.find((t) => t.tunnel_id === confirmRecreate)?.name}</span> and create a fresh tunnel with the same name, routes, and DNS records.
+          </p>
+          <p className="mb-4 text-sm text-muted-foreground">The sidecar will be respawned on the same network. This is effectively a token rotation — there will be a brief downtime during the switch.</p>
+          <div className="flex justify-end gap-2">
+            <Btn onClick={() => setConfirmRecreate(null)}>Cancel</Btn>
+            <Btn onClick={() => recreateMut.mutate(confirmRecreate)} disabled={recreateMut.isPending} variant="primary">{recreateMut.isPending ? "Recreating..." : "Recreate Tunnel"}</Btn>
+          </div>
+          {recreateMut.isError && <p className="mt-2 text-xs text-destructive">Recreate failed — check backend logs</p>}
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+// ---- Zones View ----
+
+const ZonesView = () => {
+  const { data, isLoading, error } = useQuery({ queryKey: ["zones"], queryFn: () => apiFetch<ZonesResponse>("/zones") });
+  if (isLoading) return <p className="text-muted-foreground">Loading zones...</p>;
+  if (error) return <p className="text-destructive">Failed to load zones</p>;
+  if (!data) return null;
+  return (
+    <div className="overflow-auto rounded-lg border">
+      <table className="w-full text-sm">
+        <thead><tr className="border-b bg-muted text-left text-xs font-medium text-muted-foreground"><th className="px-3 py-2">Zone</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Plan</th><th className="px-3 py-2">Zone ID</th></tr></thead>
+        <tbody className="divide-y">{data.zones.map((z) => (
+          <tr key={z.zone_id} className="hover:bg-muted/30"><td className="px-3 py-2 font-medium">{z.zone_name}</td><td className="px-3 py-2"><div className="flex items-center gap-1.5"><StatusDot status={z.status} /><span className="text-xs">{z.status}</span></div></td><td className="px-3 py-2 text-xs text-muted-foreground">{z.plan}</td><td className="px-3 py-2 font-mono text-xs text-muted-foreground">{z.zone_id.slice(0, 16)}...</td></tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+};
+
+// ---- App ----
+
+export const App = () => {
+  const [tab, setTab] = useState<Tab>("dashboard");
+  const { data: health } = useQuery({ queryKey: ["health"], queryFn: () => apiFetch<{ status: string }>("/health") });
+  return (
+    <div className="min-h-screen bg-background">
+      <header className="border-b">
+        <div className="flex items-center gap-4 px-6 py-2">
+          <h1 className="text-lg font-bold">Dockflare</h1>
+          {health && <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><StatusDot status="running" />connected</span>}
+          <nav className="ml-6 flex gap-0.5 rounded-lg bg-muted p-0.5">
+            {([["dashboard", "Dashboard"], ["zones", "Zones"]] as const).map(([k, l]) => (
+              <button key={k} onClick={() => setTab(k)} className={`rounded px-3 py-1 text-sm font-medium ${tab === k ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>{l}</button>
+            ))}
+          </nav>
+        </div>
+      </header>
+      <div className="px-6 py-3">
+        {tab === "dashboard" && <DashboardView />}
+        {tab === "zones" && <ZonesView />}
+      </div>
+    </div>
+  );
+};
