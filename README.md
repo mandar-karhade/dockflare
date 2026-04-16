@@ -4,6 +4,8 @@
 
 One dashboard to manage all your tunnels, routes, and cloudflared sidecars across Docker Compose projects — replacing scattered `.env` tokens and per-project cloudflared services.
 
+![Dockflare Dashboard](docs/images/demo.png)
+
 ## Why
 
 If you run multiple projects on a VPS with Cloudflare Tunnels, you probably have this:
