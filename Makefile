@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend test lint typecheck build db-migrate db-reset clean
+.PHONY: setup dev dev-backend dev-frontend test lint typecheck build db-migrate db-reset clean
 
 VENV := .venv/bin
 PYTHON := $(VENV)/python
@@ -6,6 +6,13 @@ UVICORN := $(VENV)/uvicorn
 PYTEST := $(VENV)/pytest
 RUFF := $(VENV)/ruff
 MYPY := $(VENV)/mypy
+
+# One-shot bootstrap: uv, venv, deps, frontend, docker perms, server
+setup:
+	./scripts/setup.sh
+
+setup-only:
+	./scripts/setup.sh --no-start
 
 # Development
 dev: dev-backend dev-frontend

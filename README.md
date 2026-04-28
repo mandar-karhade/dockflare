@@ -40,9 +40,21 @@ Every new hostname means editing ingress YAML, every new project means creating 
 ### Prerequisites
 
 - A VPS/server running Docker with your projects
-- Python 3.12+
-- Node.js 20+
 - A Cloudflare account with at least one zone
+
+Install the system packages `setup.sh` expects (one-time, requires sudo):
+
+```bash
+# make, curl, Python 3.12, Docker
+sudo apt update
+sudo apt install -y make curl python3.12 python3.12-venv docker.io
+
+# Node.js 20+ (Ubuntu's default 'nodejs' is too old)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+```
+
+`uv` is *not* a prerequisite — `setup.sh` installs it for you under `~/.local/bin`.
 
 ### 1. Create a Cloudflare API Token
 
@@ -58,24 +70,12 @@ Go to [Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens) an
 
 Set **Account Resources** to your account and **Zone Resources** to "All zones" (or specific zones).
 
-### 2. Clone and Install
+### 2. Clone and Configure
 
 ```bash
 git clone https://github.com/yourusername/dockflare.git
 cd dockflare
-
-# Backend
-uv venv .venv
-source .venv/bin/activate
-uv pip install -e ".[dev]"
-
-# Frontend
-cd frontend
-npm install
-cd ..
 ```
-
-### 3. Configure
 
 Create a `.env` file in the project root:
 
@@ -83,17 +83,33 @@ Create a `.env` file in the project root:
 CF_TOKEN=your_cloudflare_api_token_here
 ```
 
-### 4. Run
-
-In two terminals:
+### 3. Run setup
 
 ```bash
-# Terminal 1: Backend
-source .venv/bin/activate
-cd backend
-uvicorn app.main:app --host 0.0.0.0 --port 8088 --reload --reload-dir app
+./scripts/setup.sh
+# or, equivalently:
+make setup
+```
 
-# Terminal 2: Frontend
+The script is idempotent (safe to re-run) and performs:
+
+1. **Install `uv`** to `~/.local/bin` via the official installer if missing.
+2. **Verify `node`/`npm`** are on `PATH`; aborts with an install hint if not.
+3. **Create `.venv`** with Python 3.12 (`uv venv`) and install Python deps editably with dev extras (`uv pip install -e ".[dev]"`).
+4. **`npm install`** inside `frontend/`.
+5. **`alembic upgrade head`** to initialize the SQLite DB.
+6. **Add your user to the `docker` group** via `sudo usermod -aG docker` if not already a member — required so the manager can read `/var/run/docker.sock`.
+7. **Start uvicorn** on `0.0.0.0:8088` with auto-reload. If the docker group was just added, uvicorn is launched under `sg docker` so it inherits the new group without you logging out.
+
+Flags: `--no-start` (install only), `--no-frontend`, `--no-migrate`.
+
+If the docker group was added on this run, your *existing* shells still won't see it until you log out and back in. Until then, run new commands inside `newgrp docker` or just re-run `./scripts/setup.sh`.
+
+### 4. Start the frontend
+
+In a second terminal:
+
+```bash
 cd frontend
 npm run dev
 ```
