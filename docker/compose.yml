@@ -20,6 +20,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     restart: unless-stopped
+    env_file:
+      - ../.env
     environment:
       TM_DOCKER_HOST: tcp://socket-proxy:2375
       TM_DB_PATH: /app/data/tm.db

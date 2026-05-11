@@ -54,7 +54,8 @@ def get_cf_client() -> CloudflareClient:
 def get_docker_client() -> DockerClient:
     global _docker_client
     if _docker_client is None:
-        _docker_client = DockerClient(base_url="unix:///var/run/docker.sock")
+        settings = get_settings()
+        _docker_client = DockerClient(base_url=settings.docker_host)
     return _docker_client
 
 
