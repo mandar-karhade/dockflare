@@ -340,13 +340,23 @@ class IngressUpdateRequest(BaseModel):
 async def update_ingress(
     tunnel_id: str, rules: list[IngressUpdateRequest]
 ) -> dict[str, Any]:
-    """Update the ingress configuration for a tunnel."""
+    """Update ingress and sync DNS CNAMEs for a tunnel."""
     client = get_cf_client()
 
     accounts = await client.list_accounts()
     if not accounts:
         return {"error": "No accounts found"}
     account_id = accounts[0]["id"]
+
+    # Snapshot existing hostnames so we know what DNS to clean up after the push
+    try:
+        current_config = await client.get_tunnel_config(account_id, tunnel_id)
+        current_ingress = current_config.get("config", {}).get("ingress", [])
+    except Exception:
+        current_ingress = []
+    old_hostnames = {r["hostname"] for r in current_ingress if r.get("hostname")}
+    new_hostnames = {r.hostname for r in rules}
+    to_remove = old_hostnames - new_hostnames
 
     ingress: list[dict[str, Any]] = []
     for r in rules:
@@ -360,7 +370,69 @@ async def update_ingress(
     config = {"ingress": ingress, "warp-routing": {"enabled": False}}
     await client.update_tunnel_config(account_id, tunnel_id, config)
 
-    return {"tunnel_id": tunnel_id, "ingress_count": len(rules), "status": "updated"}
+    # Sync DNS: ensure CNAMEs for the current ingress, drop CNAMEs for removed hostnames
+    zones = await client.list_zones(account_id)
+    zone_map: dict[str, str] = {z["name"]: z["id"] for z in zones}
+    cname_target = f"{tunnel_id}.cfargotunnel.com"
+    dns_results: list[dict[str, str]] = []
+
+    def _resolve_zone(hostname: str) -> str | None:
+        parts = hostname.lstrip("*.").split(".")
+        for i in range(len(parts) - 1):
+            candidate = ".".join(parts[i:])
+            if candidate in zone_map:
+                return zone_map[candidate]
+        return None
+
+    for hostname in new_hostnames:
+        zone_id = _resolve_zone(hostname)
+        if not zone_id:
+            dns_results.append({"hostname": hostname, "status": "no_zone_found"})
+            continue
+        existing = await client.list_dns_records(zone_id, name=hostname)
+        if any(cname_target in (r.get("content") or "") for r in existing):
+            continue
+        if existing:
+            for rec in existing:
+                if rec.get("type") in ("CNAME", "A", "AAAA"):
+                    await client.update_dns_record(
+                        zone_id, rec["id"],
+                        record_type="CNAME",
+                        content=cname_target,
+                        proxied=True,
+                    )
+                    dns_results.append({"hostname": hostname, "status": "updated"})
+                    break
+        else:
+            await client.create_dns_record(
+                zone_id,
+                record_type="CNAME",
+                name=hostname,
+                content=cname_target,
+                proxied=True,
+                comment=f"tunnel-manager:{tunnel_id}",
+            )
+            dns_results.append({"hostname": hostname, "status": "created"})
+
+    for hostname in to_remove:
+        zone_id = _resolve_zone(hostname)
+        if not zone_id:
+            continue
+        existing = await client.list_dns_records(zone_id, name=hostname)
+        for rec in existing:
+            if "cfargotunnel.com" in (rec.get("content") or ""):
+                try:
+                    await client.delete_dns_record(zone_id, rec["id"])
+                    dns_results.append({"hostname": hostname, "status": "deleted"})
+                except Exception:
+                    pass
+
+    return {
+        "tunnel_id": tunnel_id,
+        "ingress_count": len(rules),
+        "dns": dns_results,
+        "status": "updated",
+    }
 
 
 class AdoptTunnelRequest(BaseModel):
