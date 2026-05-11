@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,13 @@ def get_settings() -> Settings:
 
 
 def load_cf_token() -> str:
-    """Load CF token from .env file."""
+    """Load CF token from Docker secret, env var, or .env file (in that order)."""
+    secret_path = Path("/run/secrets/cf_token")
+    if secret_path.exists():
+        return secret_path.read_text().strip()
+    env_token = os.environ.get("CF_TOKEN", "").strip()
+    if env_token:
+        return env_token
     env_path = Path(__file__).resolve().parents[3] / ".env"
     if env_path.exists():
         for line in env_path.read_text().splitlines():

@@ -1,0 +1,52 @@
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      SERVICES: 0
+      TASKS: 0
+      INFO: 1
+      EVENTS: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - internal
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    environment:
+      TM_DOCKER_HOST: tcp://socket-proxy:2375
+      TM_DB_PATH: /app/data/tm.db
+      CF_TOKEN: ${CF_TOKEN:?CF_TOKEN must be set in .env or environment}
+      TM_MASTER_KEY_HEX: ${TM_MASTER_KEY_HEX:-0000000000000000000000000000000000000000000000000000000000000000}
+    volumes:
+      - backend-data:/app/data
+    networks:
+      - internal
+    depends_on:
+      - socket-proxy
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    restart: unless-stopped
+    ports:
+      - "8088:80"
+    networks:
+      - internal
+    depends_on:
+      - backend
+
+volumes:
+  backend-data:
+
+networks:
+  internal:
+    driver: bridge

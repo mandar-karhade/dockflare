@@ -1,20 +1,10 @@
-# Stage 1: Build frontend
-FROM node:20-alpine AS frontend
-WORKDIR /app
-RUN corepack enable
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
-COPY frontend/ ./
-RUN pnpm build
-
-# Stage 2: Python deps
+# Backend: FastAPI on uvicorn
 FROM python:3.12-slim AS pydeps
 WORKDIR /app
 RUN pip install --no-cache-dir uv
 COPY pyproject.toml ./
 RUN uv pip install --system --no-cache .
 
-# Stage 3: Runtime
 FROM python:3.12-slim AS runtime
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl sqlite3 \
@@ -27,9 +17,8 @@ COPY --from=pydeps /usr/local/bin /usr/local/bin
 COPY backend/app ./app
 COPY backend/alembic ./alembic
 COPY backend/alembic.ini ./
-COPY --from=frontend /app/dist ./app/static
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && chown -R tm:tm /app
+RUN chmod +x /entrypoint.sh && mkdir -p /app/data && chown -R tm:tm /app
 
 USER tm
 EXPOSE 8088
