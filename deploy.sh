@@ -160,6 +160,9 @@ rsync -avz --delete \
   --include='frontend/' \
   --include='frontend/package.json' \
   --include='frontend/package-lock.json' \
+  --include='frontend/components.json' \
+  --include='frontend/postcss.config.cjs' \
+  --include='frontend/tailwind.config.cjs' \
   --include='frontend/tsconfig*.json' \
   --include='frontend/vite.config.ts' \
   --include='frontend/index.html' \
