@@ -169,7 +169,7 @@ def test_get_networks():
 
 
 def test_get_exposed_ports():
-    attrs = {"Config": {"ExposedPorts": {"3000/tcp": {}, "8080/tcp": {}, "53/udp": {}}}}
+    attrs = {"Config": {"ExposedPorts": {"3000/tcp": {}, "8080/tcp": {}, "53/udp": {}, "bad-key": {}}}}
     ports = get_exposed_ports(attrs)
     assert set(ports) == {3000, 8080}  # UDP filtered out
 

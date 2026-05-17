@@ -30,8 +30,8 @@ def get_exposed_ports(attrs: dict[str, Any]) -> list[int]:
     exposed = attrs.get("Config", {}).get("ExposedPorts") or {}
     ports: list[int] = []
     for key in exposed:
-        port_str, proto = key.split("/")
-        if proto == "tcp":
+        port_str, sep, proto = key.partition("/")
+        if sep and proto == "tcp" and port_str.isdigit():
             ports.append(int(port_str))
     return ports
 
