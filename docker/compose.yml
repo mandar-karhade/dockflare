@@ -8,6 +8,7 @@ services:
       SERVICES: 0
       TASKS: 0
       INFO: 1
+      IMAGES: 1
       EVENTS: 1
       POST: 1
     volumes:
