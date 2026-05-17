@@ -9,6 +9,7 @@ set -euo pipefail
 #
 # Usage:
 #   ./deploy.sh                  # Full deploy (rsync + build + up)
+#   ./deploy.sh --host user@ip   # Deploy to a specific SSH host
 #   ./deploy.sh --setup          # First-time host check (Docker / app dir)
 #   ./deploy.sh --sync-only      # Rsync only — skip build
 #   ./deploy.sh backend          # Rebuild & restart backend only
@@ -16,40 +17,112 @@ set -euo pipefail
 #
 # Environment overrides:
 #   DOCKFLARE_HOST=user@host     (default: m@192.168.0.171)
-#   DOCKFLARE_APP_DIR=/path      (default: /home/m/dockflare)
+#   DOCKFLARE_APP_DIR=/path      (default: <remote-home>/dockflare)
 # =============================================================================
 
 DEPLOY_HOST="${DOCKFLARE_HOST:-m@192.168.0.171}"
-DEPLOY_APP_DIR="${DOCKFLARE_APP_DIR:-/home/m/dockflare}"
+DEPLOY_APP_DIR="${DOCKFLARE_APP_DIR:-}"
+APP_DIR_EXPLICIT=0
+[ -n "${DOCKFLARE_APP_DIR:-}" ] && APP_DIR_EXPLICIT=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+log()  { echo "[deploy] $*"; }
+err()  { echo "[deploy] ERROR: $*" >&2; exit 1; }
+
+usage() {
+  cat <<EOF
+Usage:
+  ./deploy.sh [--host user@ip] [--app-dir /path] [--setup|--sync-only] [backend|frontend]
+
+Options:
+  --host user@ip     SSH target host (default: ${DOCKFLARE_HOST:-m@192.168.0.171})
+  --app-dir /path    Remote app directory (default: <remote-home>/dockflare)
+  --setup            First-time host check (Docker / app dir)
+  --sync-only        Rsync only — skip build
+  -h, --help         Show this help
+EOF
+}
+
+MODE="deploy"
 COMPONENT=""
-for arg in "$@"; do
-  case "$arg" in
-    --setup|--sync-only) ;;
-    backend|frontend) COMPONENT="$arg" ;;
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --host)
+      [ "$#" -ge 2 ] || err "--host requires a value like sharedservices@152.53.84.146"
+      DEPLOY_HOST="$2"
+      shift 2
+      ;;
+    --host=*)
+      DEPLOY_HOST="${1#--host=}"
+      shift
+      ;;
+    --app-dir)
+      [ "$#" -ge 2 ] || err "--app-dir requires a remote path"
+      DEPLOY_APP_DIR="$2"
+      APP_DIR_EXPLICIT=1
+      shift 2
+      ;;
+    --app-dir=*)
+      DEPLOY_APP_DIR="${1#--app-dir=}"
+      APP_DIR_EXPLICIT=1
+      shift
+      ;;
+    --setup)
+      MODE="setup"
+      shift
+      ;;
+    --sync-only)
+      MODE="sync-only"
+      shift
+      ;;
+    backend|frontend)
+      COMPONENT="$1"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      err "Unknown argument: $1"
+      ;;
   esac
 done
 
-log()  { echo "[deploy] $*"; }
-err()  { echo "[deploy] ERROR: $*" >&2; exit 1; }
+[ -n "$DEPLOY_HOST" ] || err "Deploy host cannot be empty."
+
+resolve_default_app_dir() {
+  if [ "$APP_DIR_EXPLICIT" -eq 1 ]; then
+    [ -n "$DEPLOY_APP_DIR" ] || err "Deploy app dir cannot be empty."
+    return
+  fi
+
+  REMOTE_HOME="$(ssh "$DEPLOY_HOST" 'printf %s "$HOME"')" \
+    || err "Cannot resolve remote home directory on $DEPLOY_HOST."
+  [ -n "$REMOTE_HOME" ] || err "Remote home directory is empty on $DEPLOY_HOST."
+  DEPLOY_APP_DIR="$REMOTE_HOME/dockflare"
+}
 
 # ---- Pre-flight ---------------------------------------------------------
 [ -f docker/compose.yml ] || err "docker/compose.yml missing — run from repo root."
 [ -f .env ]               || err ".env missing at repo root (need CF_TOKEN=...)."
 
-if [ "${1:-}" != "--setup" ]; then
+if [ "$MODE" != "setup" ]; then
   ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEPLOY_HOST" "echo ok" >/dev/null 2>&1 \
     || err "Cannot SSH into $DEPLOY_HOST (key auth, host reachable?)."
   log "SSH OK."
+  resolve_default_app_dir
+  ssh "$DEPLOY_HOST" "mkdir -p '$DEPLOY_APP_DIR'" \
+    || err "Cannot create app dir $DEPLOY_APP_DIR on $DEPLOY_HOST."
 fi
 
-if [ "${1:-}" = "--setup" ]; then
+if [ "$MODE" = "setup" ]; then
   log "Checking remote host $DEPLOY_HOST..."
   ssh "$DEPLOY_HOST" "command -v docker && docker compose version" >/dev/null 2>&1 \
     || err "Docker / Compose not available on $DEPLOY_HOST."
+  resolve_default_app_dir
   ssh "$DEPLOY_HOST" "mkdir -p '$DEPLOY_APP_DIR'"
   log "Remote ready. App dir: $DEPLOY_APP_DIR"
   exit 0
@@ -103,7 +176,7 @@ log "Rsync done."
 log "Deploying .env..."
 scp "$SCRIPT_DIR/.env" "$DEPLOY_HOST:$DEPLOY_APP_DIR/.env"
 
-if [ "${1:-}" = "--sync-only" ]; then
+if [ "$MODE" = "sync-only" ]; then
   log "Sync-only — skipping build."
   exit 0
 fi
