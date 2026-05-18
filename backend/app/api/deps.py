@@ -12,6 +12,7 @@ from app.clients.cloudflare.fake import FakeCloudflareClient
 from app.clients.docker.client import DockerClient
 from app.config import Settings
 from app.core.vault import VaultService
+from app.services.cf_tunnel_cache import CloudflareTunnelCache
 
 
 @lru_cache
@@ -39,6 +40,7 @@ def load_cf_token() -> str:
 _cf_client: CloudflareClient | None = None
 _docker_client: DockerClient | None = None
 _vault: VaultService | None = None
+_cf_tunnel_cache: CloudflareTunnelCache | None = None
 
 
 def get_cf_client() -> CloudflareClient:
@@ -65,3 +67,10 @@ def get_vault() -> VaultService:
         settings = get_settings()
         _vault = VaultService(key=settings.get_master_key())
     return _vault
+
+
+def get_cf_tunnel_cache() -> CloudflareTunnelCache:
+    global _cf_tunnel_cache
+    if _cf_tunnel_cache is None:
+        _cf_tunnel_cache = CloudflareTunnelCache()
+    return _cf_tunnel_cache

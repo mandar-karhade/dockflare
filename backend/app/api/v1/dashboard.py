@@ -10,11 +10,33 @@ from typing import Any
 import httpx as _httpx
 from fastapi import APIRouter
 
-from app.api.deps import get_cf_client, get_docker_client
-from app.clients.docker.helpers import get_compose_identity, get_container_name, get_exposed_ports, get_networks
+from app.api.deps import get_cf_client, get_cf_tunnel_cache, get_docker_client
+from app.clients.docker.helpers import (
+    get_compose_identity,
+    get_container_name,
+    get_exposed_ports,
+    get_networks,
+)
 from app.core import labels as lbl
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+async def _get_account_id() -> str:
+    client = get_cf_client()
+    return await get_cf_tunnel_cache().get_default_account_id(client) or ""
+
+
+@router.post("/refresh")
+async def refresh_dashboard() -> dict[str, Any]:
+    """Force-refresh all Cloudflare tunnel data used by the dashboard."""
+    client = get_cf_client()
+    account_id = await _get_account_id()
+    if not account_id:
+        return {"status": "skipped", "reason": "no_account", "tunnels": 0}
+
+    items = await get_cf_tunnel_cache().refresh_all(client, account_id)
+    return {"status": "refreshed", "tunnels": len(items)}
 
 
 @router.get("")
@@ -35,9 +57,8 @@ async def get_dashboard() -> dict[str, Any]:
     local_arch = "linux_amd64" if machine in ("x86_64", "AMD64") else f"linux_{machine}"
 
     # Get CF data
-    accounts = await client.list_accounts()
-    account_id = accounts[0]["id"] if accounts else ""
-    cf_tunnels = await client.list_tunnels(account_id) if account_id else []
+    account_id = await _get_account_id()
+    cached_tunnels = await get_cf_tunnel_cache().get_all(client, account_id) if account_id else []
 
     # Get all containers
     all_containers = await docker.list_containers()
@@ -84,9 +105,10 @@ async def get_dashboard() -> dict[str, Any]:
     tunnel_map: dict[str, dict[str, Any]] = {}  # tunnel_id -> full info
     machines: dict[str, int] = {}
 
-    for t in cf_tunnels:
+    for cached in cached_tunnels:
+        t = cached.tunnel
         tid = t["id"]
-        raw_conns = await client.get_tunnel_connections(account_id, tid)
+        raw_conns = cached.connections
         conns = []
         origin_ip = None
         connector_arch = None
@@ -98,12 +120,7 @@ async def get_dashboard() -> dict[str, Any]:
             for c in connector.get("conns", []):
                 conns.append(c)
 
-        ingress_rules = []
-        try:
-            config = await client.get_tunnel_config(account_id, tid)
-            ingress_rules = config.get("config", {}).get("ingress", [])
-        except Exception:
-            pass
+        ingress_rules = cached.config.get("config", {}).get("ingress", [])
 
         sidecar = local_sidecar_for_tunnel.get(tid)
         ip_matches = origin_ip and local_public_ip and origin_ip == local_public_ip
