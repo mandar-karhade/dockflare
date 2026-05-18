@@ -7,9 +7,14 @@ from typing import Any
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from app.api.deps import get_cf_client
+from app.api.deps import get_cf_client, get_cf_tunnel_cache
 
 router = APIRouter(prefix="/tunnels", tags=["tunnels"])
+
+
+async def _default_account_id(client: Any) -> str | None:
+    accounts = await client.list_accounts()
+    return accounts[0]["id"] if accounts else None
 
 
 @router.get("")
@@ -264,6 +269,7 @@ async def create_tunnel(body: TunnelCreateRequest) -> dict[str, Any]:
         networks=networks,
         labels=sidecar_labels,
     )
+    await get_cf_tunnel_cache().refresh_tunnel(client, account_id, tunnel_id)
 
     return {
         "tunnel_id": tunnel_id,
@@ -326,8 +332,29 @@ async def delete_tunnel(tunnel_id: str) -> dict[str, Any]:
 
     # Delete the tunnel from CF
     await client.delete_tunnel(account_id, tunnel_id)
+    get_cf_tunnel_cache().invalidate_tunnel(account_id, tunnel_id)
 
     return {"tunnel_id": tunnel_id, "status": "deleted"}
+
+
+@router.post("/{tunnel_id}/refresh")
+async def refresh_tunnel(tunnel_id: str) -> dict[str, Any]:
+    """Force-refresh one tunnel's cached Cloudflare status and config."""
+    client = get_cf_client()
+    account_id = await _default_account_id(client)
+    if not account_id:
+        return {"error": "No accounts found"}
+
+    cached = await get_cf_tunnel_cache().refresh_tunnel(client, account_id, tunnel_id)
+    conns = [conn for connector in cached.connections for conn in connector.get("conns", [])]
+    ingress = cached.config.get("config", {}).get("ingress", [])
+    return {
+        "tunnel_id": tunnel_id,
+        "name": cached.tunnel["name"],
+        "status": "connected" if conns else "disconnected",
+        "connections": len(conns),
+        "route_count": len([rule for rule in ingress if "hostname" in rule]),
+    }
 
 
 class IngressUpdateRequest(BaseModel):
@@ -426,6 +453,7 @@ async def update_ingress(
                     dns_results.append({"hostname": hostname, "status": "deleted"})
                 except Exception:
                     pass
+    await get_cf_tunnel_cache().refresh_tunnel(client, account_id, tunnel_id)
 
     return {
         "tunnel_id": tunnel_id,
@@ -507,6 +535,7 @@ async def adopt_tunnel(body: AdoptTunnelRequest) -> dict[str, Any]:
         )
         result["sidecar_container_id"] = sidecar["Id"][:12]
         result["sidecar_name"] = container_name
+    await get_cf_tunnel_cache().refresh_tunnel(client, account_id, body.tunnel_id)
 
     return result
 
@@ -666,6 +695,7 @@ async def import_tunnel_config(body: ImportTunnelRequest) -> dict[str, Any]:
             labels=sidecar_labels,
         )
         result["sidecar_container_id"] = sidecar["Id"][:12]
+    await get_cf_tunnel_cache().refresh_tunnel(client, account_id, tunnel_id)
 
     return result
 
@@ -794,6 +824,8 @@ async def recreate_tunnel(tunnel_id: str) -> dict[str, Any]:
         networks=networks,
         labels=sidecar_labels,
     )
+    get_cf_tunnel_cache().invalidate_tunnel(account_id, tunnel_id)
+    await get_cf_tunnel_cache().refresh_tunnel(client, account_id, new_tunnel_id)
 
     return {
         "old_tunnel_id": tunnel_id,

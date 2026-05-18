@@ -320,6 +320,16 @@ const DashboardView = () => {
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); setConfirmRecreate(null); },
   });
 
+  const refreshAllMut = useMutation({
+    mutationFn: () => apiFetch("/dashboard/refresh", { method: "POST" }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); },
+  });
+
+  const refreshTunnelMut = useMutation({
+    mutationFn: (id: string) => apiFetch(`/tunnels/${id}/refresh`, { method: "POST" }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); },
+  });
+
   const handleExport = async (tunnelId: string) => {
     const config = await apiFetch<ExportedConfig>(`/tunnels/${tunnelId}/export`);
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
@@ -362,7 +372,7 @@ const DashboardView = () => {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Btn onClick={() => setShowCreate(true)} variant="primary">New Tunnel</Btn>
         <Btn onClick={() => setShowImport(true)}>Import</Btn>
-        <Btn onClick={() => void qc.invalidateQueries({ queryKey: ["dashboard"] })}>Refresh</Btn>
+        <Btn onClick={() => refreshAllMut.mutate()} disabled={refreshAllMut.isPending}>{refreshAllMut.isPending ? "Refreshing..." : "Refresh"}</Btn>
         <div className="ml-auto flex gap-0.5 rounded-lg bg-muted p-0.5">
           <button onClick={() => setFilterMachine("all")} className={`rounded px-2 py-1 text-xs font-medium ${filterMachine === "all" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>All ({data.total_tunnels})</button>
           {Object.entries(data.machines).sort(([, a], [, b]) => b - a).map(([m, c]) => (
@@ -452,6 +462,7 @@ const DashboardView = () => {
                         <div className="flex gap-1">
                           <Btn onClick={() => setEditingTunnel(editingTunnel === tunnel.tunnel_id ? null : tunnel.tunnel_id)} variant="ghost">Edit</Btn>
                           <Btn onClick={() => void handleExport(tunnel.tunnel_id)} variant="ghost">Export</Btn>
+                          <Btn onClick={() => refreshTunnelMut.mutate(tunnel.tunnel_id)} disabled={refreshTunnelMut.isPending} variant="ghost">{refreshTunnelMut.isPending ? "Refreshing..." : "Refresh"}</Btn>
                           <Btn onClick={() => setConfirmRecreate(tunnel.tunnel_id)} variant="ghost">Recreate</Btn>
                           <Btn onClick={() => setConfirmDelete(tunnel.tunnel_id)} variant="danger">Delete</Btn>
                         </div>

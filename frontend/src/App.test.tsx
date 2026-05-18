@@ -146,6 +146,7 @@ describe("dashboard actions", () => {
     expect(row).not.toBeNull();
     expect(within(row as HTMLTableRowElement).getByText("Edit")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).getByText("Export")).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByText("Refresh")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).getByText("Recreate")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).getByText("Delete")).toBeInTheDocument();
   });
@@ -159,6 +160,7 @@ describe("dashboard actions", () => {
     expect(within(row as HTMLTableRowElement).getByText("Create New")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Edit")).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Export")).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByText("Refresh")).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Recreate")).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Delete")).not.toBeInTheDocument();
   });
@@ -222,7 +224,30 @@ describe("dashboard actions", () => {
     expect(row).not.toBeNull();
     expect(within(row as HTMLTableRowElement).queryByText("Edit")).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Export")).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByText("Refresh")).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Recreate")).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Delete")).not.toBeInTheDocument();
+  });
+
+  test("refresh action refreshes only the selected tunnel", async () => {
+    mockApiFetch.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === "/health") return { status: "ok" };
+      if (path === "/dashboard") return dashboard;
+      if (path === "/tunnels/tun-alpha/refresh" && options?.method === "POST") {
+        return { tunnel_id: "tun-alpha", status: "connected", connections: 1 };
+      }
+      throw new Error(`Unhandled API path: ${path}`);
+    });
+    renderApp();
+
+    const row = await screen.findByText("alpha-tunnel").then((node) => node.closest("tr"));
+    fireEvent.click(within(row as HTMLTableRowElement).getByText("Refresh"));
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/tunnels/tun-alpha/refresh",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
   });
 });
