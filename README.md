@@ -86,7 +86,7 @@ DOCKFLARE_BASIC_AUTH_PASSWORD=change_me_to_a_long_random_password
 ```
 
 The Docker deployment serves the frontend and API through nginx with HTTP Basic Auth.
-Only `98.40.139.139`, `2601:2c3:c37e:7c50:145e:92ce:290a:1ba2`, and local container health checks are allowed through the reverse proxy.
+Only localhost, private RFC1918 networks, `98.40.139.139`, and `2601:2c3:c37e:7c50:145e:92ce:290a:1ba2` are allowed through the reverse proxy.
 
 ### 3. Run setup
 
