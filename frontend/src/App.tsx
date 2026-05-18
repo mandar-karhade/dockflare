@@ -76,6 +76,17 @@ interface ExportedConfig {
   ingress: Record<string, unknown>[];
 }
 
+interface CreatedTunnel {
+  tunnel_id: string;
+  name: string;
+}
+
+interface DraftTunnel {
+  tunnel_id: string;
+  name: string;
+  routes: TunnelRoute[];
+}
+
 // Container types for service picker
 interface ContainersResponse {
   projects: Record<string, { compose_service: string | null; name: string; exposed_ports: number[]; status: string; is_cloudflared: boolean }[]>;
@@ -234,19 +245,51 @@ const ImportTunnelModal = ({ open, onClose }: { open: boolean; onClose: () => vo
   );
 };
 
-const CreateTunnelModal = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
+const CreateTunnelModal = ({
+  open,
+  onClose,
+  project,
+  service,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  project?: string;
+  service?: string;
+  onCreated?: (tunnel: CreatedTunnel) => void;
+}) => {
   const qc = useQueryClient();
   const [name, setName] = useState("");
-  const [project, setProject] = useState("");
-  const [service, setService] = useState("");
-  const mut = useMutation({ mutationFn: (b: { name: string; primary_compose_project?: string; primary_compose_service?: string }) => apiFetch("/tunnels", { method: "POST", body: JSON.stringify(b) }), onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); setName(""); onClose(); } });
+  const [manualProject, setManualProject] = useState("");
+  const [manualService, setManualService] = useState("");
+  const isProjectScoped = Boolean(project);
+  const mut = useMutation({
+    mutationFn: (b: { name: string; primary_compose_project?: string; primary_compose_service?: string }) => apiFetch<CreatedTunnel>("/tunnels", { method: "POST", body: JSON.stringify(b) }),
+    onSuccess: (created) => {
+      void qc.invalidateQueries({ queryKey: ["dashboard"] });
+      setName("");
+      onCreated?.(created);
+      onClose();
+    },
+  });
+  const create = () => {
+    mut.mutate({
+      name,
+      ...(project ? { primary_compose_project: project } : manualProject ? { primary_compose_project: manualProject } : {}),
+      ...(service ? { primary_compose_service: service } : manualService ? { primary_compose_service: manualService } : {}),
+    });
+  };
   return (
     <Modal open={open} onClose={onClose} title="Create New Tunnel">
       <div className="space-y-3">
-        <div><label className="mb-1 block text-sm font-medium">Name</label><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. my-project" className="w-full rounded border bg-background px-3 py-2 text-sm" /></div>
-        <div><label className="mb-1 block text-sm font-medium">Compose Project</label><input value={project} onChange={(e) => setProject(e.target.value)} className="w-full rounded border bg-background px-3 py-2 text-sm" /></div>
-        <div><label className="mb-1 block text-sm font-medium">Service</label><input value={service} onChange={(e) => setService(e.target.value)} className="w-full rounded border bg-background px-3 py-2 text-sm" /></div>
-        <div className="flex justify-end gap-2"><Btn onClick={onClose}>Cancel</Btn><Btn onClick={() => mut.mutate({ name, ...(project ? { primary_compose_project: project } : {}), ...(service ? { primary_compose_service: service } : {}) })} disabled={!name || mut.isPending} variant="primary">{mut.isPending ? "Creating..." : "Create"}</Btn></div>
+        <div><label htmlFor="tunnel-name" className="mb-1 block text-sm font-medium">Name</label><input id="tunnel-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. my-project" className="w-full rounded border bg-background px-3 py-2 text-sm" /></div>
+        {!isProjectScoped && (
+          <>
+            <div><label htmlFor="tunnel-project" className="mb-1 block text-sm font-medium">Compose Project</label><input id="tunnel-project" value={manualProject} onChange={(e) => setManualProject(e.target.value)} className="w-full rounded border bg-background px-3 py-2 text-sm" /></div>
+            <div><label htmlFor="tunnel-service" className="mb-1 block text-sm font-medium">Service</label><input id="tunnel-service" value={manualService} onChange={(e) => setManualService(e.target.value)} className="w-full rounded border bg-background px-3 py-2 text-sm" /></div>
+          </>
+        )}
+        <div className="flex justify-end gap-2"><Btn onClick={onClose}>Cancel</Btn><Btn onClick={create} disabled={!name || mut.isPending} variant="primary">{mut.isPending ? "Creating..." : "Create"}</Btn></div>
       </div>
     </Modal>
   );
@@ -259,6 +302,8 @@ const DashboardView = () => {
   const { data, isLoading, error } = useQuery({ queryKey: ["dashboard"], queryFn: () => apiFetch<DashboardResponse>("/dashboard") });
   const [filterMachine, setFilterMachine] = useState("all");
   const [showCreate, setShowCreate] = useState(false);
+  const [projectCreate, setProjectCreate] = useState<{ project: Project; routes: TunnelRoute[] } | null>(null);
+  const [draftTunnel, setDraftTunnel] = useState<DraftTunnel | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [editingTunnel, setEditingTunnel] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -284,6 +329,22 @@ const DashboardView = () => {
     URL.revokeObjectURL(url);
   };
 
+  const buildDraftRoutes = (project: Project) => project.containers
+    .filter((c) => !c.is_cloudflared && c.status === "running")
+    .flatMap((c) => {
+      const target = c.service ?? c.name;
+      const ports = c.ports.length > 0 ? c.ports : [0];
+      return ports.map((port) => ({
+        hostname: "",
+        service: port ? `http://${target}:${String(port)}` : `http://${target}`,
+        path: null,
+      }));
+    });
+
+  const openProjectCreate = (project: Project) => {
+    setProjectCreate({ project, routes: buildDraftRoutes(project) });
+  };
+
   if (isLoading) return <p className="text-muted-foreground">Loading...</p>;
   if (error) return <p className="text-destructive">Failed to load dashboard</p>;
   if (!data) return null;
@@ -291,7 +352,9 @@ const DashboardView = () => {
   // Build flat rows: each container is a row, grouped by project
   // Filter tunnels by machine, but show all projects (containers are always local)
   const tunnelsByMachine = filterMachine === "all" ? data.tunnels : data.tunnels.filter((t) => t.machine === filterMachine);
-  const visibleTunnelIds = new Set(tunnelsByMachine.map((t) => t.tunnel_id));
+  const activeTunnel = editingTunnel
+    ? data.tunnels.find((t) => t.tunnel_id === editingTunnel) ?? (draftTunnel?.tunnel_id === editingTunnel ? draftTunnel : null)
+    : null;
 
   return (
     <div>
@@ -329,7 +392,6 @@ const DashboardView = () => {
             {data.projects.sort((a, b) => a.project.localeCompare(b.project)).map((p) => {
               const containers = p.containers.filter((c) => !c.is_cloudflared).sort((a, b) => (a.service ?? a.name).localeCompare(b.service ?? b.name));
               const tunnel = p.tunnel;
-              const tunnelVisible = tunnel && visibleTunnelIds.has(tunnel.tunnel_id);
               const rowCount = containers.length || 1;
 
               return containers.map((c, idx) => (
@@ -386,14 +448,16 @@ const DashboardView = () => {
                   {/* Actions */}
                   {idx === 0 && (
                     <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
-                      {tunnelVisible && tunnel ? (
+                      {tunnel ? (
                         <div className="flex gap-1">
                           <Btn onClick={() => setEditingTunnel(editingTunnel === tunnel.tunnel_id ? null : tunnel.tunnel_id)} variant="ghost">Edit</Btn>
                           <Btn onClick={() => void handleExport(tunnel.tunnel_id)} variant="ghost">Export</Btn>
                           <Btn onClick={() => setConfirmRecreate(tunnel.tunnel_id)} variant="ghost">Recreate</Btn>
                           <Btn onClick={() => setConfirmDelete(tunnel.tunnel_id)} variant="danger">Delete</Btn>
                         </div>
-                      ) : <span className="text-xs text-muted-foreground">-</span>}
+                      ) : (
+                        <Btn onClick={() => openProjectCreate(p)} variant="ghost">Create New</Btn>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -417,12 +481,7 @@ const DashboardView = () => {
                     <td className="px-3 py-1.5 text-xs italic text-muted-foreground">no routes</td>
                     <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
                     <td className="px-3 py-1.5 whitespace-nowrap">
-                      <div className="flex gap-1">
-                        <Btn onClick={() => setEditingTunnel(editingTunnel === t.tunnel_id ? null : t.tunnel_id)} variant="ghost">Edit</Btn>
-                        <Btn onClick={() => void handleExport(t.tunnel_id)} variant="ghost">Export</Btn>
-                        <Btn onClick={() => setConfirmRecreate(t.tunnel_id)} variant="ghost">Recreate</Btn>
-                        <Btn onClick={() => setConfirmDelete(t.tunnel_id)} variant="danger">Delete</Btn>
-                      </div>
+                      <span className="text-xs text-muted-foreground">-</span>
                     </td>
                   </tr>
                 );
@@ -444,12 +503,7 @@ const DashboardView = () => {
                   <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{r.service}</td>
                   {idx === 0 && (
                     <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}>
-                      <div className="flex gap-1">
-                        <Btn onClick={() => setEditingTunnel(editingTunnel === t.tunnel_id ? null : t.tunnel_id)} variant="ghost">Edit</Btn>
-                        <Btn onClick={() => void handleExport(t.tunnel_id)} variant="ghost">Export</Btn>
-                        <Btn onClick={() => setConfirmRecreate(t.tunnel_id)} variant="ghost">Recreate</Btn>
-                        <Btn onClick={() => setConfirmDelete(t.tunnel_id)} variant="danger">Delete</Btn>
-                      </div>
+                      <span className="text-xs text-muted-foreground">-</span>
                     </td>
                   )}
                 </tr>
@@ -460,17 +514,27 @@ const DashboardView = () => {
       </div>
 
       {/* Inline editor */}
-      {editingTunnel && (
+      {editingTunnel && activeTunnel && (
         <div className="mt-3 rounded-lg border p-3">
           <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Editing: {data.tunnels.find((t) => t.tunnel_id === editingTunnel)?.name}</h3>
+            <h3 className="text-sm font-semibold">Editing: {activeTunnel.name}</h3>
             <Btn onClick={() => setEditingTunnel(null)}>Close</Btn>
           </div>
-          <IngressEditor tunnelId={editingTunnel} ingress={data.tunnels.find((t) => t.tunnel_id === editingTunnel)?.routes ?? []} />
+          <IngressEditor key={editingTunnel} tunnelId={editingTunnel} ingress={activeTunnel.routes} />
         </div>
       )}
 
       <CreateTunnelModal open={showCreate} onClose={() => setShowCreate(false)} />
+      <CreateTunnelModal
+        open={projectCreate !== null}
+        onClose={() => setProjectCreate(null)}
+        project={projectCreate?.project.project}
+        onCreated={(created) => {
+          const routes = projectCreate?.routes ?? [];
+          setDraftTunnel({ tunnel_id: created.tunnel_id, name: created.name, routes });
+          setEditingTunnel(created.tunnel_id);
+        }}
+      />
       <ImportTunnelModal open={showImport} onClose={() => setShowImport(false)} />
       {confirmDelete !== null && (
         <DeleteTunnelModal tunnelId={confirmDelete} tunnelName={data.tunnels.find((t) => t.tunnel_id === confirmDelete)?.name ?? ""} onClose={() => setConfirmDelete(null)} onConfirm={(id) => deleteMut.mutate(id)} isPending={deleteMut.isPending} />
