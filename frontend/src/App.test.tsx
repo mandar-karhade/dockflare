@@ -24,6 +24,19 @@ const installLocalStorage = () => {
   });
 };
 
+const installSessionStorage = () => {
+  const values = new Map<string, string>();
+  Object.defineProperty(window, "sessionStorage", {
+    configurable: true,
+    value: {
+      getItem: vi.fn((key: string) => values.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => values.set(key, value)),
+      removeItem: vi.fn((key: string) => values.delete(key)),
+      clear: vi.fn(() => values.clear()),
+    },
+  });
+};
+
 const renderApp = () => {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -132,6 +145,7 @@ describe("dashboard actions", () => {
   beforeEach(() => {
     mockApiFetch.mockReset();
     installLocalStorage();
+    installSessionStorage();
     document.documentElement.classList.remove("dark");
     document.documentElement.style.colorScheme = "";
     mockApiFetch.mockImplementation(async (path: string) => {
@@ -281,5 +295,28 @@ describe("dashboard actions", () => {
     expect(screen.getByLabelText("Switch to dark theme")).toBeInTheDocument();
     expect(document.documentElement).not.toHaveClass("dark");
     expect(window.localStorage.getItem("dockflare-theme")).toBe("light");
+  });
+
+  test("hides dashboard columns for the session and resets the view", async () => {
+    renderApp();
+
+    expect(await screen.findByRole("columnheader", { name: "Target" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Columns"));
+    fireEvent.click(screen.getByLabelText("Target"));
+
+    expect(screen.queryByRole("columnheader", { name: "Target" })).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem("dockflare-dashboard-columns")).toContain('"target":false');
+
+    cleanup();
+    renderApp();
+
+    await screen.findByText("alpha-tunnel");
+    expect(screen.queryByRole("columnheader", { name: "Target" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Columns"));
+    fireEvent.click(screen.getByText("Reset View"));
+
+    expect(screen.getByRole("columnheader", { name: "Target" })).toBeInTheDocument();
+    expect(window.sessionStorage.getItem("dockflare-dashboard-columns")).toContain('"target":true');
   });
 });
