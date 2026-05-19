@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Moon, Sun } from "lucide-react";
+import { Moon, Settings2, Sun } from "lucide-react";
 import { apiFetch } from "./api/client";
 import { useEffect, useState } from "react";
 
@@ -95,10 +95,26 @@ interface ContainersResponse {
 
 type Tab = "dashboard" | "tunnels" | "zones";
 type Theme = "light" | "dark";
+type DashboardColumnId = (typeof DASHBOARD_COLUMNS)[number]["id"];
+type DashboardColumnVisibility = Record<DashboardColumnId, boolean>;
 
 // ---- Components ----
 
 const THEME_STORAGE_KEY = "dockflare-theme";
+const DASHBOARD_COLUMN_STORAGE_KEY = "dockflare-dashboard-columns";
+
+const DASHBOARD_COLUMNS = [
+  { id: "tunnel", label: "Tunnel", canHide: true },
+  { id: "status", label: "Status", canHide: true },
+  { id: "project", label: "Project", canHide: true },
+  { id: "network", label: "Network", canHide: true },
+  { id: "container", label: "Container", canHide: true },
+  { id: "service", label: "Service", canHide: true },
+  { id: "ports", label: "Ports", canHide: true },
+  { id: "hostname", label: "Hostname", canHide: true },
+  { id: "target", label: "Target", canHide: true },
+  { id: "actions", label: "Actions", canHide: false },
+] as const;
 
 const getInitialTheme = (): Theme => {
   if (typeof window === "undefined") return "dark";
@@ -109,6 +125,26 @@ const getInitialTheme = (): Theme => {
 const applyTheme = (theme: Theme) => {
   document.documentElement.classList.toggle("dark", theme === "dark");
   document.documentElement.style.colorScheme = theme;
+};
+
+const defaultDashboardColumns = (): DashboardColumnVisibility =>
+  Object.fromEntries(DASHBOARD_COLUMNS.map((column) => [column.id, true])) as DashboardColumnVisibility;
+
+const getInitialDashboardColumns = (): DashboardColumnVisibility => {
+  const defaults = defaultDashboardColumns();
+  if (typeof window === "undefined") return defaults;
+  try {
+    const stored = window.sessionStorage.getItem(DASHBOARD_COLUMN_STORAGE_KEY);
+    if (!stored) return defaults;
+    const parsed = JSON.parse(stored) as Partial<Record<DashboardColumnId, unknown>>;
+    return DASHBOARD_COLUMNS.reduce<DashboardColumnVisibility>((columns, column) => {
+      const storedValue = parsed[column.id];
+      columns[column.id] = column.canHide && typeof storedValue === "boolean" ? storedValue : true;
+      return columns;
+    }, defaults);
+  } catch {
+    return defaults;
+  }
 };
 
 const ThemeToggle = ({ theme, onToggle }: { theme: Theme; onToggle: () => void }) => {
@@ -125,6 +161,57 @@ const ThemeToggle = ({ theme, onToggle }: { theme: Theme; onToggle: () => void }
       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       {isDark ? "Dark" : "Light"}
     </button>
+  );
+};
+
+const ColumnVisibilityMenu = ({
+  columns,
+  onToggle,
+  onReset,
+}: {
+  columns: DashboardColumnVisibility;
+  onToggle: (column: DashboardColumnId) => void;
+  onReset: () => void;
+}) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="inline-flex h-7 items-center gap-1.5 rounded border bg-background px-2.5 text-xs font-medium transition-colors hover:bg-muted"
+      >
+        <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
+        Columns
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-20 mt-1 w-44 rounded border bg-popover p-2 text-popover-foreground shadow-lg">
+          <div className="space-y-1">
+            {DASHBOARD_COLUMNS.map((column) => (
+              <label
+                key={column.id}
+                className={`flex items-center gap-2 rounded px-1.5 py-1 text-xs ${column.canHide ? "hover:bg-muted" : "text-muted-foreground"}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={columns[column.id]}
+                  disabled={!column.canHide}
+                  onChange={() => onToggle(column.id)}
+                />
+                <span>{column.label}</span>
+              </label>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={onReset}
+            className="mt-2 w-full rounded border px-2 py-1 text-xs font-medium hover:bg-muted"
+          >
+            Reset View
+          </button>
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -339,8 +426,13 @@ const DashboardView = () => {
   const [showImport, setShowImport] = useState(false);
   const [editingTunnel, setEditingTunnel] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [visibleColumns, setVisibleColumns] = useState<DashboardColumnVisibility>(getInitialDashboardColumns);
 
   const [confirmRecreate, setConfirmRecreate] = useState<string | null>(null);
+
+  useEffect(() => {
+    window.sessionStorage.setItem(DASHBOARD_COLUMN_STORAGE_KEY, JSON.stringify(visibleColumns));
+  }, [visibleColumns]);
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => apiFetch(`/tunnels/${id}`, { method: "DELETE" }),
@@ -386,6 +478,12 @@ const DashboardView = () => {
   const openProjectCreate = (project: Project) => {
     setProjectCreate({ project, routes: buildDraftRoutes(project) });
   };
+  const isColumnVisible = (column: DashboardColumnId) => visibleColumns[column];
+  const toggleColumn = (column: DashboardColumnId) => {
+    const columnConfig = DASHBOARD_COLUMNS.find((item) => item.id === column);
+    if (!columnConfig?.canHide) return;
+    setVisibleColumns((current) => ({ ...current, [column]: !current[column] }));
+  };
 
   if (isLoading) return <p className="text-muted-foreground">Loading...</p>;
   if (error) return <p className="text-destructive">Failed to load dashboard</p>;
@@ -405,6 +503,7 @@ const DashboardView = () => {
         <Btn onClick={() => setShowCreate(true)} variant="primary">New Tunnel</Btn>
         <Btn onClick={() => setShowImport(true)}>Import</Btn>
         <Btn onClick={() => refreshAllMut.mutate()} disabled={refreshAllMut.isPending}>{refreshAllMut.isPending ? "Refreshing..." : "Refresh"}</Btn>
+        <ColumnVisibilityMenu columns={visibleColumns} onToggle={toggleColumn} onReset={() => setVisibleColumns(defaultDashboardColumns())} />
         <div className="ml-auto flex gap-0.5 rounded-lg bg-muted p-0.5">
           <button onClick={() => setFilterMachine("all")} className={`rounded px-2 py-1 text-xs font-medium ${filterMachine === "all" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>All ({data.total_tunnels})</button>
           {Object.entries(data.machines).sort(([, a], [, b]) => b - a).map(([m, c]) => (
@@ -418,16 +517,16 @@ const DashboardView = () => {
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10">
             <tr className="border-b bg-muted text-left text-xs font-medium text-muted-foreground">
-              <th className="px-3 py-2 whitespace-nowrap">Tunnel</th>
-              <th className="px-3 py-2 whitespace-nowrap">Status</th>
-              <th className="px-3 py-2 whitespace-nowrap">Project</th>
-              <th className="px-3 py-2 whitespace-nowrap">Network</th>
-              <th className="px-3 py-2 whitespace-nowrap">Container</th>
-              <th className="px-3 py-2 whitespace-nowrap">Service</th>
-              <th className="px-3 py-2 whitespace-nowrap">Ports</th>
-              <th className="px-3 py-2 whitespace-nowrap">Hostname</th>
-              <th className="px-3 py-2 whitespace-nowrap">Target</th>
-              <th className="px-3 py-2 whitespace-nowrap">Actions</th>
+              {isColumnVisible("tunnel") && <th className="px-3 py-2 whitespace-nowrap">Tunnel</th>}
+              {isColumnVisible("status") && <th className="px-3 py-2 whitespace-nowrap">Status</th>}
+              {isColumnVisible("project") && <th className="px-3 py-2 whitespace-nowrap">Project</th>}
+              {isColumnVisible("network") && <th className="px-3 py-2 whitespace-nowrap">Network</th>}
+              {isColumnVisible("container") && <th className="px-3 py-2 whitespace-nowrap">Container</th>}
+              {isColumnVisible("service") && <th className="px-3 py-2 whitespace-nowrap">Service</th>}
+              {isColumnVisible("ports") && <th className="px-3 py-2 whitespace-nowrap">Ports</th>}
+              {isColumnVisible("hostname") && <th className="px-3 py-2 whitespace-nowrap">Hostname</th>}
+              {isColumnVisible("target") && <th className="px-3 py-2 whitespace-nowrap">Target</th>}
+              {isColumnVisible("actions") && <th className="px-3 py-2 whitespace-nowrap">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -441,54 +540,54 @@ const DashboardView = () => {
                   {idx === 0 && (
                     <>
                       {/* Tunnel */}
-                      <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
+                      {isColumnVisible("tunnel") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
                         {tunnel ? (
                           <div>
                             <span className="text-xs font-medium">{tunnel.name}</span>
                             <div className="font-mono text-[10px] text-muted-foreground">{tunnel.machine !== "unknown" ? tunnel.machine : ""}</div>
                           </div>
                         ) : <span className="text-xs text-muted-foreground">-</span>}
-                      </td>
+                      </td>}
                       {/* Status */}
-                      <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
+                      {isColumnVisible("status") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
                         {tunnel ? (
                           <div className="flex items-center gap-1.5">
                             <StatusDot status={tunnel.status} />
                             <span className="text-xs">{tunnel.status === "connected" ? `${String(tunnel.connections)} conn` : "offline"}</span>
                           </div>
                         ) : <span className="text-xs text-muted-foreground">-</span>}
-                      </td>
+                      </td>}
                       {/* Project */}
-                      <td className="px-3 py-1.5 align-top font-medium whitespace-nowrap" rowSpan={rowCount}>
+                      {isColumnVisible("project") && <td className="px-3 py-1.5 align-top font-medium whitespace-nowrap" rowSpan={rowCount}>
                         {p.project}
-                      </td>
+                      </td>}
                       {/* Network */}
-                      <td className="px-3 py-1.5 align-top font-mono text-xs text-muted-foreground whitespace-nowrap" rowSpan={rowCount}>
+                      {isColumnVisible("network") && <td className="px-3 py-1.5 align-top font-mono text-xs text-muted-foreground whitespace-nowrap" rowSpan={rowCount}>
                         {p.networks.join(", ") || "default"}
-                      </td>
+                      </td>}
                     </>
                   )}
                   {/* Container */}
-                  <td className="px-3 py-1.5 whitespace-nowrap">
+                  {isColumnVisible("container") && <td className="px-3 py-1.5 whitespace-nowrap">
                     <div className="flex items-center gap-1.5">
                       <StatusDot status={c.status} />
                       <span className="font-mono text-xs">{c.name}</span>
                     </div>
-                  </td>
+                  </td>}
                   {/* Service */}
-                  <td className="px-3 py-1.5 text-xs whitespace-nowrap">{c.service ?? "-"}</td>
+                  {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs whitespace-nowrap">{c.service ?? "-"}</td>}
                   {/* Ports */}
-                  <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{c.ports.length > 0 ? c.ports.join(", ") : "-"}</td>
+                  {isColumnVisible("ports") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{c.ports.length > 0 ? c.ports.join(", ") : "-"}</td>}
                   {/* Hostname */}
-                  <td className="px-3 py-1.5 whitespace-nowrap">
+                  {isColumnVisible("hostname") && <td className="px-3 py-1.5 whitespace-nowrap">
                     {c.hostname ? (
                       <a href={`https://${c.hostname}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{c.hostname}</a>
                     ) : <span className="text-xs text-muted-foreground">-</span>}
-                  </td>
+                  </td>}
                   {/* Target */}
-                  <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{c.target_service_url ?? "-"}</td>
+                  {isColumnVisible("target") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{c.target_service_url ?? "-"}</td>}
                   {/* Actions */}
-                  {idx === 0 && (
+                  {idx === 0 && isColumnVisible("actions") && (
                     <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
                       {tunnel ? (
                         <div className="flex gap-1">
@@ -514,18 +613,18 @@ const DashboardView = () => {
               if (routes.length === 0) {
                 return (
                   <tr key={t.tunnel_id} className="hover:bg-muted/30 bg-muted/10">
-                    <td className="px-3 py-1.5 whitespace-nowrap"><span className="text-xs font-medium">{t.name}</span><div className="font-mono text-[10px] text-muted-foreground">{t.machine !== "unknown" ? t.machine : ""}</div></td>
-                    <td className="px-3 py-1.5"><div className="flex items-center gap-1.5"><StatusDot status={t.status} /><span className="text-xs">{t.status === "connected" ? `${String(t.connections)} conn` : "offline"}</span></div></td>
-                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
-                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
-                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
-                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
-                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
-                    <td className="px-3 py-1.5 text-xs italic text-muted-foreground">no routes</td>
-                    <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
-                    <td className="px-3 py-1.5 whitespace-nowrap">
+                    {isColumnVisible("tunnel") && <td className="px-3 py-1.5 whitespace-nowrap"><span className="text-xs font-medium">{t.name}</span><div className="font-mono text-[10px] text-muted-foreground">{t.machine !== "unknown" ? t.machine : ""}</div></td>}
+                    {isColumnVisible("status") && <td className="px-3 py-1.5"><div className="flex items-center gap-1.5"><StatusDot status={t.status} /><span className="text-xs">{t.status === "connected" ? `${String(t.connections)} conn` : "offline"}</span></div></td>}
+                    {isColumnVisible("project") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
+                    {isColumnVisible("network") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
+                    {isColumnVisible("container") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
+                    {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
+                    {isColumnVisible("ports") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
+                    {isColumnVisible("hostname") && <td className="px-3 py-1.5 text-xs italic text-muted-foreground">no routes</td>}
+                    {isColumnVisible("target") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
+                    {isColumnVisible("actions") && <td className="px-3 py-1.5 whitespace-nowrap">
                       <span className="text-xs text-muted-foreground">-</span>
-                    </td>
+                    </td>}
                   </tr>
                 );
               }
@@ -533,18 +632,18 @@ const DashboardView = () => {
                 <tr key={`${t.tunnel_id}-${String(idx)}`} className="hover:bg-muted/30 bg-muted/10">
                   {idx === 0 && (
                     <>
-                      <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}><span className="text-xs font-medium">{t.name}</span><div className="font-mono text-[10px] text-muted-foreground">{t.machine !== "unknown" ? t.machine : ""}</div></td>
-                      <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}><div className="flex items-center gap-1.5"><StatusDot status={t.status} /><span className="text-xs">{t.status === "connected" ? `${String(t.connections)} conn` : "offline"}</span></div></td>
-                      <td className="px-3 py-1.5 align-top text-xs text-muted-foreground" rowSpan={rs}>-</td>
-                      <td className="px-3 py-1.5 align-top text-xs text-muted-foreground" rowSpan={rs}>-</td>
+                      {isColumnVisible("tunnel") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}><span className="text-xs font-medium">{t.name}</span><div className="font-mono text-[10px] text-muted-foreground">{t.machine !== "unknown" ? t.machine : ""}</div></td>}
+                      {isColumnVisible("status") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}><div className="flex items-center gap-1.5"><StatusDot status={t.status} /><span className="text-xs">{t.status === "connected" ? `${String(t.connections)} conn` : "offline"}</span></div></td>}
+                      {isColumnVisible("project") && <td className="px-3 py-1.5 align-top text-xs text-muted-foreground" rowSpan={rs}>-</td>}
+                      {isColumnVisible("network") && <td className="px-3 py-1.5 align-top text-xs text-muted-foreground" rowSpan={rs}>-</td>}
                     </>
                   )}
-                  <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>
-                  <td className="px-3 py-1.5 text-xs text-muted-foreground whitespace-nowrap">{r.service.replace("http://", "").replace("https://", "").split(":")[0]}</td>
-                  <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">{r.service.includes(":") ? r.service.split(":").pop()?.split("/")[0] : "-"}</td>
-                  <td className="px-3 py-1.5 whitespace-nowrap"><a href={`https://${r.hostname}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{r.hostname}</a></td>
-                  <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{r.service}</td>
-                  {idx === 0 && (
+                  {isColumnVisible("container") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
+                  {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs text-muted-foreground whitespace-nowrap">{r.service.replace("http://", "").replace("https://", "").split(":")[0]}</td>}
+                  {isColumnVisible("ports") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">{r.service.includes(":") ? r.service.split(":").pop()?.split("/")[0] : "-"}</td>}
+                  {isColumnVisible("hostname") && <td className="px-3 py-1.5 whitespace-nowrap"><a href={`https://${r.hostname}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{r.hostname}</a></td>}
+                  {isColumnVisible("target") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{r.service}</td>}
+                  {idx === 0 && isColumnVisible("actions") && (
                     <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}>
                       <span className="text-xs text-muted-foreground">-</span>
                     </td>
