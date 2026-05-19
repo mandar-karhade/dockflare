@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Moon, Sun } from "lucide-react";
 import { apiFetch } from "./api/client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 // ---- Types ----
 
@@ -93,8 +94,39 @@ interface ContainersResponse {
 }
 
 type Tab = "dashboard" | "tunnels" | "zones";
+type Theme = "light" | "dark";
 
 // ---- Components ----
+
+const THEME_STORAGE_KEY = "dockflare-theme";
+
+const getInitialTheme = (): Theme => {
+  if (typeof window === "undefined") return "dark";
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return stored === "light" || stored === "dark" ? stored : "dark";
+};
+
+const applyTheme = (theme: Theme) => {
+  document.documentElement.classList.toggle("dark", theme === "dark");
+  document.documentElement.style.colorScheme = theme;
+};
+
+const ThemeToggle = ({ theme, onToggle }: { theme: Theme; onToggle: () => void }) => {
+  const isDark = theme === "dark";
+  const Icon = isDark ? Moon : Sun;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={`Switch to ${isDark ? "light" : "dark"} theme`}
+      title={`Switch to ${isDark ? "light" : "dark"} theme`}
+      className="ml-auto inline-flex h-8 items-center gap-2 rounded border bg-background px-2.5 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-muted"
+    >
+      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+      {isDark ? "Dark" : "Light"}
+    </button>
+  );
+};
 
 const Dot = ({ color }: { color: string }) => <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${color}`} />;
 const StatusDot = ({ status }: { status: string }) => {
@@ -590,7 +622,14 @@ const ZonesView = () => {
 
 export const App = () => {
   const [tab, setTab] = useState<Tab>("dashboard");
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const { data: health } = useQuery({ queryKey: ["health"], queryFn: () => apiFetch<{ status: string }>("/health") });
+
+  useEffect(() => {
+    applyTheme(theme);
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b">
@@ -602,6 +641,7 @@ export const App = () => {
               <button key={k} onClick={() => setTab(k)} className={`rounded px-3 py-1 text-sm font-medium ${tab === k ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>{l}</button>
             ))}
           </nav>
+          <ThemeToggle theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} />
         </div>
       </header>
       <div className="px-6 py-3">
