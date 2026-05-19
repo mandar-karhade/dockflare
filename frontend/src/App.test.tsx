@@ -11,6 +11,19 @@ vi.mock("./api/client", () => ({
 
 const mockApiFetch = vi.mocked(apiFetch);
 
+const installLocalStorage = () => {
+  const values = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: vi.fn((key: string) => values.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => values.set(key, value)),
+      removeItem: vi.fn((key: string) => values.delete(key)),
+      clear: vi.fn(() => values.clear()),
+    },
+  });
+};
+
 const renderApp = () => {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -112,10 +125,15 @@ const dashboard = {
 describe("dashboard actions", () => {
   afterEach(() => {
     cleanup();
+    document.documentElement.classList.remove("dark");
+    document.documentElement.style.colorScheme = "";
   });
 
   beforeEach(() => {
     mockApiFetch.mockReset();
+    installLocalStorage();
+    document.documentElement.classList.remove("dark");
+    document.documentElement.style.colorScheme = "";
     mockApiFetch.mockImplementation(async (path: string) => {
       if (path === "/health") return { status: "ok" };
       if (path === "/dashboard") return dashboard;
@@ -249,5 +267,19 @@ describe("dashboard actions", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
+  });
+
+  test("defaults to dark theme and toggles to light", async () => {
+    renderApp();
+
+    expect(await screen.findByLabelText("Switch to light theme")).toBeInTheDocument();
+    expect(document.documentElement).toHaveClass("dark");
+    expect(window.localStorage.getItem("dockflare-theme")).toBe("dark");
+
+    fireEvent.click(screen.getByLabelText("Switch to light theme"));
+
+    expect(screen.getByLabelText("Switch to dark theme")).toBeInTheDocument();
+    expect(document.documentElement).not.toHaveClass("dark");
+    expect(window.localStorage.getItem("dockflare-theme")).toBe("light");
   });
 });
