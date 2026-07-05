@@ -91,6 +91,33 @@ async def test_create_tunnel_happy_path(
 
 
 @pytest.mark.asyncio
+async def test_create_tunnel_uses_project_network_when_service_name_is_not_found(
+    db_session: AsyncSession,
+    vault: VaultService,
+    fake_cf: FakeCloudflareClient,
+    fake_docker: FakeDockerClient,
+):
+    cred = await _seed_credential(db_session, vault)
+    svc = TunnelService(
+        db=db_session,
+        vault=vault,
+        cf_client=fake_cf,
+        docker_client=fake_docker,
+        credential_id=cred.id,
+        account_id="acc-1",
+    )
+
+    tunnel = await svc.create(
+        name="myapp-stage",
+        primary_compose_project="myapp",
+        primary_compose_service="myapp-stage",
+    )
+
+    networks = await fake_docker.get_container_networks(tunnel.cloudflared_container_id)
+    assert networks == ["myapp_default"]
+
+
+@pytest.mark.asyncio
 async def test_delete_tunnel(
     db_session: AsyncSession,
     vault: VaultService,

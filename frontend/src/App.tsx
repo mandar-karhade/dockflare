@@ -85,6 +85,10 @@ interface CreatedTunnel {
 interface DraftTunnel {
   tunnel_id: string;
   name: string;
+  project: string;
+  status: string;
+  connections: number;
+  machine: string;
   routes: TunnelRoute[];
 }
 
@@ -113,6 +117,7 @@ const DASHBOARD_COLUMNS = [
   { id: "ports", label: "Ports", canHide: true },
   { id: "hostname", label: "Hostname", canHide: true },
   { id: "target", label: "Target", canHide: true },
+  { id: "path", label: "Path", canHide: true },
   { id: "actions", label: "Actions", canHide: false },
 ] as const;
 
@@ -289,45 +294,26 @@ const ServicePicker = ({ value, onChange }: { value: string; onChange: (v: strin
   );
 };
 
-// ---- Ingress Editor ----
+type EditableRoute = { hostname: string; service: string; path: string };
 
-const IngressEditor = ({ tunnelId, ingress }: { tunnelId: string; ingress: TunnelRoute[] }) => {
-  const qc = useQueryClient();
-  const [rules, setRules] = useState(ingress.map((r) => ({ hostname: r.hostname, service: r.service, path: r.path ?? "" })));
-  const save = useMutation({
-    mutationFn: (body: { hostname: string; service: string; path: string | null }[]) => apiFetch(`/tunnels/${tunnelId}/ingress`, { method: "PUT", body: JSON.stringify(body) }),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); void qc.invalidateQueries({ queryKey: ["tunnels"] }); },
-  });
-  const update = (i: number, f: "hostname" | "service" | "path", v: string) => { const u = [...rules]; const r = u[i]; if (r) { r[f] = v; setRules(u); } };
+const routeInputClass = "w-full min-w-44 rounded border bg-background px-2 py-1 font-mono text-xs";
+const pathInputClass = "w-24 rounded border bg-background px-2 py-1 font-mono text-xs";
 
-  return (
-    <div className="space-y-2">
-      <p className="text-xs text-muted-foreground">Pick targets from Docker or type a URL. Catch-all added automatically.</p>
-      {rules.map((rule, i) => (
-        <div key={i} className="flex gap-2 rounded border bg-muted/30 p-2">
-          <div className="flex-1">
-            <label className="text-[10px] text-muted-foreground">Hostname</label>
-            <input value={rule.hostname} onChange={(e) => update(i, "hostname", e.target.value)} className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" />
-          </div>
-          <div className="flex-1">
-            <label className="text-[10px] text-muted-foreground">Target</label>
-            <ServicePicker value={rule.service} onChange={(v) => update(i, "service", v)} />
-          </div>
-          <div className="w-24">
-            <label className="text-[10px] text-muted-foreground">Path</label>
-            <input value={rule.path} onChange={(e) => update(i, "path", e.target.value)} className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" />
-          </div>
-          <div className="flex items-end"><Btn onClick={() => setRules(rules.filter((_, j) => j !== i))} variant="danger">X</Btn></div>
-        </div>
-      ))}
-      <div className="flex gap-2">
-        <Btn onClick={() => setRules([...rules, { hostname: "", service: "", path: "" }])}>+ Add Route</Btn>
-        <div className="flex-1" />
-        <Btn onClick={() => save.mutate(rules.filter((r) => r.hostname && r.service).map((r) => ({ hostname: r.hostname, service: r.service, path: r.path || null })))} disabled={save.isPending} variant="primary">{save.isPending ? "Saving..." : "Save to Cloudflare"}</Btn>
-      </div>
-    </div>
-  );
+const sanitizeHostname = (value: string) => {
+  const raw = value.trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw.includes("://") ? raw : `http://${raw}`).hostname.replace(/\.$/, "");
+  } catch {
+    return ((raw.replace(/^https?:\/\//, "").split("/")[0] ?? "").split(":")[0] ?? "").replace(/\.$/, "");
+  }
 };
+
+const toApiRoute = (route: EditableRoute) => ({
+  hostname: sanitizeHostname(route.hostname),
+  service: route.service.trim(),
+  path: route.path.trim() || null,
+});
 
 // ---- Modals ----
 
@@ -423,8 +409,10 @@ const DashboardView = () => {
   const [showCreate, setShowCreate] = useState(false);
   const [projectCreate, setProjectCreate] = useState<{ project: Project; routes: TunnelRoute[] } | null>(null);
   const [draftTunnel, setDraftTunnel] = useState<DraftTunnel | null>(null);
+  const [routeDrafts, setRouteDrafts] = useState<Record<string, EditableRoute>>({});
+  const [editingRouteKey, setEditingRouteKey] = useState<string | null>(null);
+  const [savingRouteKey, setSavingRouteKey] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
-  const [editingTunnel, setEditingTunnel] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [visibleColumns, setVisibleColumns] = useState<DashboardColumnVisibility>(getInitialDashboardColumns);
 
@@ -454,6 +442,12 @@ const DashboardView = () => {
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); },
   });
 
+  const saveIngressMut = useMutation({
+    mutationFn: ({ tunnelId, rules }: { tunnelId: string; rules: ReturnType<typeof toApiRoute>[] }) =>
+      apiFetch(`/tunnels/${tunnelId}/ingress`, { method: "PUT", body: JSON.stringify(rules) }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dashboard"] }); },
+  });
+
   const handleExport = async (tunnelId: string) => {
     const config = await apiFetch<ExportedConfig>(`/tunnels/${tunnelId}/export`);
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
@@ -478,6 +472,46 @@ const DashboardView = () => {
   const openProjectCreate = (project: Project) => {
     setProjectCreate({ project, routes: buildDraftRoutes(project) });
   };
+  const defaultTarget = (container: ContainerEntry) => {
+    const target = container.service ?? container.name;
+    const port = container.ports[0];
+    return port ? `http://${target}:${String(port)}` : `http://${target}`;
+  };
+  const getTunnel = (tunnelId: string) => data?.tunnels.find((t) => t.tunnel_id === tunnelId) ?? (draftTunnel?.tunnel_id === tunnelId ? draftTunnel : null);
+  const getTunnelRoutes = (tunnelId: string) => getTunnel(tunnelId)?.routes ?? [];
+  const getDraft = (key: string, initial: EditableRoute) => routeDrafts[key] ?? initial;
+  const updateDraft = (key: string, initial: EditableRoute, patch: Partial<EditableRoute>) => {
+    setRouteDrafts((current) => ({ ...current, [key]: { ...(current[key] ?? initial), ...patch } }));
+  };
+  const saveRoute = (routeKey: string, tunnelId: string, originalService: string, route: EditableRoute) => {
+    const next = getTunnelRoutes(tunnelId)
+      .filter((item) => item.service !== originalService && item.service !== route.service)
+      .map((item) => toApiRoute({ hostname: item.hostname, service: item.service, path: item.path ?? "" }));
+    if (route.hostname.trim() && route.service.trim()) next.push(toApiRoute(route));
+    setSavingRouteKey(routeKey);
+    saveIngressMut.mutate(
+      { tunnelId, rules: next },
+      {
+        onSuccess: () => setEditingRouteKey((current) => (current === routeKey ? null : current)),
+        onSettled: () => setSavingRouteKey((current) => (current === routeKey ? null : current)),
+      },
+    );
+  };
+  const deleteRoute = (routeKey: string, tunnelId: string, originalService: string) => {
+    setSavingRouteKey(routeKey);
+    saveIngressMut.mutate(
+      {
+        tunnelId,
+        rules: getTunnelRoutes(tunnelId)
+          .filter((item) => item.service !== originalService)
+          .map((item) => toApiRoute({ hostname: item.hostname, service: item.service, path: item.path ?? "" })),
+      },
+      { onSettled: () => setSavingRouteKey((current) => (current === routeKey ? null : current)) },
+    );
+  };
+  const startEditing = (routeKey: string) => {
+    setEditingRouteKey(routeKey);
+  };
   const isColumnVisible = (column: DashboardColumnId) => visibleColumns[column];
   const toggleColumn = (column: DashboardColumnId) => {
     const columnConfig = DASHBOARD_COLUMNS.find((item) => item.id === column);
@@ -492,10 +526,6 @@ const DashboardView = () => {
   // Build flat rows: each container is a row, grouped by project
   // Filter tunnels by machine, but show all projects (containers are always local)
   const tunnelsByMachine = filterMachine === "all" ? data.tunnels : data.tunnels.filter((t) => t.machine === filterMachine);
-  const activeTunnel = editingTunnel
-    ? data.tunnels.find((t) => t.tunnel_id === editingTunnel) ?? (draftTunnel?.tunnel_id === editingTunnel ? draftTunnel : null)
-    : null;
-
   return (
     <div>
       {/* Toolbar */}
@@ -526,16 +556,25 @@ const DashboardView = () => {
               {isColumnVisible("ports") && <th className="px-3 py-2 whitespace-nowrap">Ports</th>}
               {isColumnVisible("hostname") && <th className="px-3 py-2 whitespace-nowrap">Hostname</th>}
               {isColumnVisible("target") && <th className="px-3 py-2 whitespace-nowrap">Target</th>}
+              {isColumnVisible("path") && <th className="px-3 py-2 whitespace-nowrap">Path</th>}
               {isColumnVisible("actions") && <th className="px-3 py-2 whitespace-nowrap">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y">
             {data.projects.sort((a, b) => a.project.localeCompare(b.project)).map((p) => {
               const containers = p.containers.filter((c) => !c.is_cloudflared).sort((a, b) => (a.service ?? a.name).localeCompare(b.service ?? b.name));
-              const tunnel = p.tunnel;
+              const tunnel = p.tunnel ?? (draftTunnel?.project === p.project ? draftTunnel : null);
               const rowCount = containers.length || 1;
 
-              return containers.map((c, idx) => (
+              return containers.map((c, idx) => {
+                const target = c.target_service_url ?? defaultTarget(c);
+                const route = tunnel ? getTunnelRoutes(tunnel.tunnel_id).find((item) => item.service === target) : null;
+                const initial: EditableRoute = { hostname: c.hostname ?? route?.hostname ?? "", service: route?.service ?? target, path: route?.path ?? "" };
+                const draftKey = tunnel ? `${tunnel.tunnel_id}:${c.container_id}` : c.container_id;
+                const draft = getDraft(draftKey, initial);
+                const isEditing = editingRouteKey === draftKey;
+                const isSaving = savingRouteKey === draftKey;
+                return (
                 <tr key={c.container_id} className={`hover:bg-muted/30 ${c.status !== "running" ? "opacity-50" : ""}`}>
                   {idx === 0 && (
                     <>
@@ -545,8 +584,11 @@ const DashboardView = () => {
                           <div>
                             <span className="text-xs font-medium">{tunnel.name}</span>
                             <div className="font-mono text-[10px] text-muted-foreground">{tunnel.machine !== "unknown" ? tunnel.machine : ""}</div>
+                            <div className="mt-1">
+                              <Btn onClick={() => setConfirmDelete(tunnel.tunnel_id)} variant="danger">Delete Tunnel</Btn>
+                            </div>
                           </div>
-                        ) : <span className="text-xs text-muted-foreground">-</span>}
+                        ) : <Btn onClick={() => openProjectCreate(p)} variant="ghost">Create New</Btn>}
                       </td>}
                       {/* Status */}
                       {isColumnVisible("status") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
@@ -580,30 +622,39 @@ const DashboardView = () => {
                   {isColumnVisible("ports") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{c.ports.length > 0 ? c.ports.join(", ") : "-"}</td>}
                   {/* Hostname */}
                   {isColumnVisible("hostname") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {c.hostname ? (
-                      <a href={`https://${c.hostname}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{c.hostname}</a>
+                    {isEditing ? (
+                      <input value={draft.hostname} onChange={(e) => updateDraft(draftKey, initial, { hostname: e.target.value })} placeholder="app.example.com" className={routeInputClass} />
+                    ) : draft.hostname ? (
+                      <a href={`https://${sanitizeHostname(draft.hostname)}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{sanitizeHostname(draft.hostname)}</a>
                     ) : <span className="text-xs text-muted-foreground">-</span>}
                   </td>}
                   {/* Target */}
-                  {isColumnVisible("target") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{c.target_service_url ?? "-"}</td>}
+                  {isColumnVisible("target") && <td className="px-3 py-1.5 whitespace-nowrap">
+                    {isEditing ? <ServicePicker value={draft.service} onChange={(service) => updateDraft(draftKey, initial, { service })} /> : <span className="font-mono text-xs text-muted-foreground">{draft.service}</span>}
+                  </td>}
+                  {isColumnVisible("path") && <td className="px-3 py-1.5 whitespace-nowrap">
+                    {isEditing ? <input value={draft.path} onChange={(e) => updateDraft(draftKey, initial, { path: e.target.value })} placeholder="/api/*" className={pathInputClass} /> : <span className="font-mono text-xs text-muted-foreground">{draft.path || "-"}</span>}
+                  </td>}
                   {/* Actions */}
-                  {idx === 0 && isColumnVisible("actions") && (
-                    <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
-                      {tunnel ? (
-                        <div className="flex gap-1">
-                          <Btn onClick={() => setEditingTunnel(editingTunnel === tunnel.tunnel_id ? null : tunnel.tunnel_id)} variant="ghost">Edit</Btn>
+                  {isColumnVisible("actions") && (
+                    <td className="px-3 py-1.5 align-top whitespace-nowrap">
+                        {tunnel ? (
+                          <div className="flex gap-1">
+                          {isEditing ? (
+                            <Btn onClick={() => saveRoute(draftKey, tunnel.tunnel_id, initial.service, draft)} disabled={isSaving} variant="primary">{isSaving ? "Saving..." : "Save"}</Btn>
+                          ) : (
+                            <Btn onClick={() => startEditing(draftKey)} variant="ghost">Edit</Btn>
+                          )}
+                          <Btn onClick={() => deleteRoute(draftKey, tunnel.tunnel_id, initial.service)} disabled={isSaving} variant="danger">Delete Route</Btn>
                           <Btn onClick={() => void handleExport(tunnel.tunnel_id)} variant="ghost">Export</Btn>
                           <Btn onClick={() => refreshTunnelMut.mutate(tunnel.tunnel_id)} disabled={refreshTunnelMut.isPending} variant="ghost">{refreshTunnelMut.isPending ? "Refreshing..." : "Refresh"}</Btn>
                           <Btn onClick={() => setConfirmRecreate(tunnel.tunnel_id)} variant="ghost">Recreate</Btn>
-                          <Btn onClick={() => setConfirmDelete(tunnel.tunnel_id)} variant="danger">Delete</Btn>
                         </div>
-                      ) : (
-                        <Btn onClick={() => openProjectCreate(p)} variant="ghost">Create New</Btn>
-                      )}
+                      ) : <span className="text-xs text-muted-foreground">-</span>}
                     </td>
                   )}
                 </tr>
-              ));
+              );});
             })}
 
             {/* Unassociated tunnels (no local project) — column order: Tunnel, Status, Project, Network, Container, Service, Ports, Hostname, Target, Actions */}
@@ -622,13 +673,20 @@ const DashboardView = () => {
                     {isColumnVisible("ports") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("hostname") && <td className="px-3 py-1.5 text-xs italic text-muted-foreground">no routes</td>}
                     {isColumnVisible("target") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
+                    {isColumnVisible("path") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("actions") && <td className="px-3 py-1.5 whitespace-nowrap">
                       <span className="text-xs text-muted-foreground">-</span>
                     </td>}
                   </tr>
                 );
               }
-              return routes.map((r, idx) => (
+              return routes.map((r, idx) => {
+                const draftKey = `${t.tunnel_id}:orphan:${String(idx)}`;
+                const initial: EditableRoute = { hostname: r.hostname, service: r.service, path: r.path ?? "" };
+                const draft = getDraft(draftKey, initial);
+                const isEditing = editingRouteKey === draftKey;
+                const isSaving = savingRouteKey === draftKey;
+                return (
                 <tr key={`${t.tunnel_id}-${String(idx)}`} className="hover:bg-muted/30 bg-muted/10">
                   {idx === 0 && (
                     <>
@@ -641,30 +699,33 @@ const DashboardView = () => {
                   {isColumnVisible("container") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                   {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs text-muted-foreground whitespace-nowrap">{r.service.replace("http://", "").replace("https://", "").split(":")[0]}</td>}
                   {isColumnVisible("ports") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">{r.service.includes(":") ? r.service.split(":").pop()?.split("/")[0] : "-"}</td>}
-                  {isColumnVisible("hostname") && <td className="px-3 py-1.5 whitespace-nowrap"><a href={`https://${r.hostname}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{r.hostname}</a></td>}
-                  {isColumnVisible("target") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{r.service}</td>}
-                  {idx === 0 && isColumnVisible("actions") && (
-                    <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}>
-                      <span className="text-xs text-muted-foreground">-</span>
+                  {isColumnVisible("hostname") && <td className="px-3 py-1.5 whitespace-nowrap">
+                    {isEditing ? <input value={draft.hostname} onChange={(e) => updateDraft(draftKey, initial, { hostname: e.target.value })} className={routeInputClass} /> : <a href={`https://${sanitizeHostname(draft.hostname)}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{sanitizeHostname(draft.hostname)}</a>}
+                  </td>}
+                  {isColumnVisible("target") && <td className="px-3 py-1.5 whitespace-nowrap">
+                    {isEditing ? <ServicePicker value={draft.service} onChange={(service) => updateDraft(draftKey, initial, { service })} /> : <span className="font-mono text-xs text-muted-foreground">{draft.service}</span>}
+                  </td>}
+                  {isColumnVisible("path") && <td className="px-3 py-1.5 whitespace-nowrap">
+                    {isEditing ? <input value={draft.path} onChange={(e) => updateDraft(draftKey, initial, { path: e.target.value })} className={pathInputClass} /> : <span className="font-mono text-xs text-muted-foreground">{draft.path || "-"}</span>}
+                  </td>}
+                  {isColumnVisible("actions") && (
+                    <td className="px-3 py-1.5 align-top whitespace-nowrap">
+                      <div className="flex gap-1">
+                        {isEditing ? (
+                          <Btn onClick={() => saveRoute(draftKey, t.tunnel_id, initial.service, draft)} disabled={isSaving} variant="primary">{isSaving ? "Saving..." : "Save"}</Btn>
+                        ) : (
+                          <Btn onClick={() => startEditing(draftKey)} variant="ghost">Edit</Btn>
+                        )}
+                        <Btn onClick={() => deleteRoute(draftKey, t.tunnel_id, initial.service)} disabled={isSaving} variant="danger">Delete Route</Btn>
+                      </div>
                     </td>
                   )}
                 </tr>
-              ));
+              );});
             })}
           </tbody>
         </table>
       </div>
-
-      {/* Inline editor */}
-      {editingTunnel && activeTunnel && (
-        <div className="mt-3 rounded-lg border p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Editing: {activeTunnel.name}</h3>
-            <Btn onClick={() => setEditingTunnel(null)}>Close</Btn>
-          </div>
-          <IngressEditor key={editingTunnel} tunnelId={editingTunnel} ingress={activeTunnel.routes} />
-        </div>
-      )}
 
       <CreateTunnelModal open={showCreate} onClose={() => setShowCreate(false)} />
       <CreateTunnelModal
@@ -673,8 +734,7 @@ const DashboardView = () => {
         project={projectCreate?.project.project}
         onCreated={(created) => {
           const routes = projectCreate?.routes ?? [];
-          setDraftTunnel({ tunnel_id: created.tunnel_id, name: created.name, routes });
-          setEditingTunnel(created.tunnel_id);
+          setDraftTunnel({ tunnel_id: created.tunnel_id, name: created.name, project: projectCreate?.project.project ?? "", status: "connected", connections: 0, machine: "local", routes });
         }}
       />
       <ImportTunnelModal open={showImport} onClose={() => setShowImport(false)} />

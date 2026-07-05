@@ -177,10 +177,40 @@ describe("dashboard actions", () => {
 
     expect(row).not.toBeNull();
     expect(within(row as HTMLTableRowElement).getByText("Edit")).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByText("Delete Route")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).getByText("Export")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).getByText("Refresh")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).getByText("Recreate")).toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).getByText("Delete")).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByText("Delete Tunnel")).toBeInTheDocument();
+  });
+
+  test("shows project create once in the tunnel column for multiple services", async () => {
+    const betaProject = dashboard.projects[1]!;
+    const betaContainer = betaProject.containers[0]!;
+    mockApiFetch.mockImplementation(async (path: string) => {
+      if (path === "/health") return { status: "ok" };
+      if (path === "/dashboard") {
+        return {
+          ...dashboard,
+          projects: [
+            {
+              ...betaProject,
+              containers: [
+                betaContainer,
+                { ...betaContainer, container_id: "beta-worker", name: "beta-worker-1", service: "worker" },
+              ],
+            },
+          ],
+          tunnels: [],
+        };
+      }
+      throw new Error(`Unhandled API path: ${path}`);
+    });
+    renderApp();
+
+    await screen.findByText("beta");
+
+    expect(screen.getAllByText("Create New")).toHaveLength(1);
   });
 
   test("shows project-scoped create action when a local project has no tunnel", async () => {
@@ -194,7 +224,7 @@ describe("dashboard actions", () => {
     expect(within(row as HTMLTableRowElement).queryByText("Export")).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Refresh")).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Recreate")).not.toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).queryByText("Delete")).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByText("Delete Tunnel")).not.toBeInTheDocument();
   });
 
   test("project-scoped create asks only for a name and seeds route targets after creation", async () => {
@@ -243,22 +273,184 @@ describe("dashboard actions", () => {
         }),
       );
     });
-    expect(await screen.findByText("Editing: beta-tunnel")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("http://api:3000")).toBeInTheDocument();
-    expect(screen.getAllByDisplayValue("").length).toBeGreaterThan(0);
+    await screen.findByText("beta-tunnel");
+    expect(screen.queryByText("Editing: beta-tunnel")).not.toBeInTheDocument();
+    expect(screen.getByText("http://api:3000")).toBeInTheDocument();
   });
 
-  test("hides row actions for tunnels that do not belong to a local project", async () => {
+  test("saves hostname edits inline with sanitized hostname and service URL target", async () => {
+    mockApiFetch.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === "/health") return { status: "ok" };
+      if (path === "/dashboard") return dashboard;
+      if (path === "/tunnels/tun-alpha/ingress" && options?.method === "PUT") {
+        return { status: "updated" };
+      }
+      throw new Error(`Unhandled API path: ${path}`);
+    });
+    renderApp();
+
+    const row = await screen.findByText("alpha-web-1").then((node) => node.closest("tr"));
+    expect(within(row as HTMLTableRowElement).queryByDisplayValue("alpha.example.com")).not.toBeInTheDocument();
+    fireEvent.click(within(row as HTMLTableRowElement).getByText("Edit"));
+    const hostname = within(row as HTMLTableRowElement).getByDisplayValue("alpha.example.com");
+    fireEvent.change(hostname, { target: { value: "https://app-stage.anywebalert.com" } });
+    fireEvent.click(within(row as HTMLTableRowElement).getByText("Save"));
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/tunnels/tun-alpha/ingress",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify([
+            { hostname: "app-stage.anywebalert.com", service: "http://web:8080", path: null },
+          ]),
+        }),
+      );
+    });
+  });
+
+  test("shows saving state only on the row being saved", async () => {
+    const alphaProject = dashboard.projects[0]!;
+    const alphaContainer = alphaProject.containers[0];
+    const twoRouteDashboard = {
+      ...dashboard,
+      projects: [
+        {
+          ...alphaProject,
+          containers: [
+            alphaContainer,
+            {
+              ...alphaContainer,
+              container_id: "alpha-api",
+              name: "alpha-api-1",
+              service: "api",
+              ports: [3000],
+              hostname: "api.example.com",
+              target_service_url: "http://api:3000",
+            },
+          ],
+        },
+      ],
+      tunnels: [
+        {
+          ...dashboard.tunnels[0],
+          routes: [
+            { hostname: "alpha.example.com", service: "http://web:8080", path: null },
+            { hostname: "api.example.com", service: "http://api:3000", path: null },
+          ],
+        },
+      ],
+    };
+    let resolveSave: (value: unknown) => void = () => {};
+    mockApiFetch.mockImplementation((path: string, options?: RequestInit) => {
+      if (path === "/health") return Promise.resolve({ status: "ok" });
+      if (path === "/dashboard") return Promise.resolve(twoRouteDashboard);
+      if (path === "/tunnels/tun-alpha/ingress" && options?.method === "PUT") {
+        return new Promise((resolve) => { resolveSave = resolve; });
+      }
+      return Promise.reject(new Error(`Unhandled API path: ${path}`));
+    });
+    renderApp();
+
+    const webRow = await screen.findByText("alpha-web-1").then((node) => node.closest("tr"));
+    const apiRow = await screen.findByText("alpha-api-1").then((node) => node.closest("tr"));
+    fireEvent.click(within(webRow as HTMLTableRowElement).getByText("Edit"));
+    fireEvent.click(within(webRow as HTMLTableRowElement).getByText("Save"));
+
+    expect(within(webRow as HTMLTableRowElement).getByText("Saving...")).toBeInTheDocument();
+    expect(within(apiRow as HTMLTableRowElement).getByText("Edit")).toBeInTheDocument();
+    expect(within(apiRow as HTMLTableRowElement).queryByDisplayValue("api.example.com")).not.toBeInTheDocument();
+
+    resolveSave({ status: "updated" });
+  });
+
+  test("deletes a route inline by saving the tunnel ingress without that target", async () => {
+    mockApiFetch.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === "/health") return { status: "ok" };
+      if (path === "/dashboard") return dashboard;
+      if (path === "/tunnels/tun-alpha/ingress" && options?.method === "PUT") {
+        return { status: "updated" };
+      }
+      throw new Error(`Unhandled API path: ${path}`);
+    });
+    renderApp();
+
+    const row = await screen.findByText("alpha-web-1").then((node) => node.closest("tr"));
+    fireEvent.click(within(row as HTMLTableRowElement).getByText("Delete Route"));
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/tunnels/tun-alpha/ingress",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify([]),
+        }),
+      );
+    });
+  });
+
+  test("saves the service URL when picking a target from the dropdown", async () => {
+    mockApiFetch.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === "/health") return { status: "ok" };
+      if (path === "/dashboard") return dashboard;
+      if (path === "/containers") {
+        return {
+          projects: {
+            beta: [
+              {
+                compose_service: "api",
+                name: "beta-api-1",
+                exposed_ports: [3000],
+                status: "running",
+                is_cloudflared: false,
+              },
+            ],
+          },
+        };
+      }
+      if (path === "/tunnels/tun-alpha/ingress" && options?.method === "PUT") {
+        return { status: "updated" };
+      }
+      throw new Error(`Unhandled API path: ${path}`);
+    });
+    renderApp();
+
+    const row = await screen.findByText("alpha-web-1").then((node) => node.closest("tr"));
+    fireEvent.click(within(row as HTMLTableRowElement).getByText("Edit"));
+    fireEvent.focus(within(row as HTMLTableRowElement).getByDisplayValue("http://web:8080"));
+    fireEvent.click(await screen.findByRole("button", { name: /api\s+http:\/\/api:3000/ }));
+    fireEvent.click(within(row as HTMLTableRowElement).getByText("Save"));
+
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/tunnels/tun-alpha/ingress",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify([
+            { hostname: "alpha.example.com", service: "http://api:3000", path: null },
+          ]),
+        }),
+      );
+    });
+  });
+
+  test("allows editing one orphan route row at a time", async () => {
     renderApp();
 
     const row = await screen.findByText("orphan-tunnel").then((node) => node.closest("tr"));
 
     expect(row).not.toBeNull();
-    expect(within(row as HTMLTableRowElement).queryByText("Edit")).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByDisplayValue("orphan.example.com")).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByText("Edit")).toBeInTheDocument();
+    fireEvent.click(within(row as HTMLTableRowElement).getByText("Edit"));
+    expect(within(row as HTMLTableRowElement).getByDisplayValue("orphan.example.com")).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByDisplayValue("http://ghost:8080")).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByText("Save")).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByText("Delete Route")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Export")).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Refresh")).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Recreate")).not.toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).queryByText("Delete")).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByText("Delete Tunnel")).not.toBeInTheDocument();
   });
 
   test("refresh action refreshes only the selected tunnel", async () => {

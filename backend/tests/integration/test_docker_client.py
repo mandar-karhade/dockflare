@@ -11,6 +11,7 @@ from app.clients.docker.helpers import (
     get_exposed_ports,
     get_networks,
     is_managed,
+    resolve_compose_networks,
     sidecar_name,
 )
 from app.core.errors import NotFoundError
@@ -71,6 +72,15 @@ async def test_find_by_compose(fake_docker: FakeDockerClient):
     results = await fake_docker.find_by_compose("myapp", "web")
     assert len(results) == 1
     assert results[0]["Id"] == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_resolve_compose_networks_uses_project_when_service_missing(
+    fake_docker: FakeDockerClient,
+):
+    networks = await resolve_compose_networks(fake_docker, "myapp", "myapp-stage")
+
+    assert networks == ["myapp_default"]
 
 
 @pytest.mark.asyncio

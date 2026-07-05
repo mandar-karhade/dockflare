@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from app.api.deps import get_cf_client, get_cf_tunnel_cache
+from app.api.deps import get_cf_client, get_cf_tunnel_cache, get_settings
+from app.utils.strings import is_valid_hostname
 
 router = APIRouter(prefix="/tunnels", tags=["tunnels"])
 
@@ -231,7 +233,7 @@ async def create_tunnel(body: TunnelCreateRequest) -> dict[str, Any]:
 
     # Spawn cloudflared sidecar
     from app.api.deps import get_docker_client
-    from app.clients.docker.helpers import sidecar_name
+    from app.clients.docker.helpers import resolve_compose_networks, sidecar_name
     from app.core import labels as lbl
 
     docker = get_docker_client()
@@ -239,19 +241,11 @@ async def create_tunnel(body: TunnelCreateRequest) -> dict[str, Any]:
     service = body.primary_compose_service or body.name
     container_name = sidecar_name(project, service)
 
-    # Find target network — search by project+service, then project alone
-    networks: list[str] = []
-    if body.primary_compose_project:
-        from app.clients.docker.helpers import get_networks
-
-        targets = await docker.find_by_compose(
-            body.primary_compose_project, body.primary_compose_service
-        )
-        if targets:
-            target_nets = get_networks(targets[0])
-            networks.extend(target_nets)
-    if not networks:
-        networks = ["bridge"]
+    networks = await resolve_compose_networks(
+        docker,
+        body.primary_compose_project,
+        body.primary_compose_service,
+    )
 
     sidecar_labels = {
         lbl.TUNNEL_ID: tunnel_id,
@@ -264,7 +258,7 @@ async def create_tunnel(body: TunnelCreateRequest) -> dict[str, Any]:
 
     sidecar = await docker.spawn_cloudflared(
         name=container_name,
-        image="cloudflare/cloudflared:latest",
+        image=get_settings().cloudflared_image,
         token=token,
         networks=networks,
         labels=sidecar_labels,
@@ -361,6 +355,16 @@ class IngressUpdateRequest(BaseModel):
     hostname: str
     service: str
     path: str | None = None
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, value: str) -> str:
+        raw = value.strip()
+        parsed = urlsplit(raw if "://" in raw else f"//{raw}")
+        hostname = (parsed.hostname or raw).strip().rstrip(".")
+        if not is_valid_hostname(hostname):
+            raise ValueError("hostname must be a valid DNS hostname")
+        return hostname
 
 
 @router.put("/{tunnel_id}/ingress")
@@ -496,7 +500,7 @@ async def adopt_tunnel(body: AdoptTunnelRequest) -> dict[str, Any]:
         token = await client.get_tunnel_token(account_id, body.tunnel_id)
 
         from app.api.deps import get_docker_client
-        from app.clients.docker.helpers import sidecar_name
+        from app.clients.docker.helpers import resolve_compose_networks, sidecar_name
         from app.core import labels as lbl
 
         docker = get_docker_client()
@@ -504,18 +508,11 @@ async def adopt_tunnel(body: AdoptTunnelRequest) -> dict[str, Any]:
         service = body.target_compose_service or tunnel["name"]
         container_name = sidecar_name(project, service)
 
-        networks: list[str] = []
-        if body.target_compose_project:
-            from app.clients.docker.helpers import get_networks
-
-            targets = await docker.find_by_compose(
-                body.target_compose_project, body.target_compose_service
-            )
-            if targets:
-                target_nets = get_networks(targets[0])
-                networks.extend(target_nets)
-        if not networks:
-            networks = ["bridge"]
+        networks = await resolve_compose_networks(
+            docker,
+            body.target_compose_project,
+            body.target_compose_service,
+        )
 
         sidecar_labels = {
             lbl.TUNNEL_ID: body.tunnel_id,
@@ -528,7 +525,7 @@ async def adopt_tunnel(body: AdoptTunnelRequest) -> dict[str, Any]:
 
         sidecar = await docker.spawn_cloudflared(
             name=container_name,
-            image="cloudflare/cloudflared:latest",
+            image=get_settings().cloudflared_image,
             token=token,
             networks=networks,
             labels=sidecar_labels,
@@ -659,7 +656,7 @@ async def import_tunnel_config(body: ImportTunnelRequest) -> dict[str, Any]:
         token = await client.get_tunnel_token(account_id, tunnel_id)
 
         from app.api.deps import get_docker_client
-        from app.clients.docker.helpers import get_networks, sidecar_name
+        from app.clients.docker.helpers import resolve_compose_networks, sidecar_name
         from app.core import labels as lbl
 
         docker = get_docker_client()
@@ -667,16 +664,11 @@ async def import_tunnel_config(body: ImportTunnelRequest) -> dict[str, Any]:
         service = body.target_compose_service or body.tunnel_name
         container_name = sidecar_name(project, service)
 
-        networks: list[str] = []
-        if body.target_compose_project:
-            targets = await docker.find_by_compose(
-                body.target_compose_project, body.target_compose_service
-            )
-            if targets:
-                target_nets = get_networks(targets[0])
-                networks.extend(target_nets)
-        if not networks:
-            networks = ["bridge"]
+        networks = await resolve_compose_networks(
+            docker,
+            body.target_compose_project,
+            body.target_compose_service,
+        )
 
         sidecar_labels = {
             lbl.TUNNEL_ID: tunnel_id,
@@ -689,7 +681,7 @@ async def import_tunnel_config(body: ImportTunnelRequest) -> dict[str, Any]:
 
         sidecar = await docker.spawn_cloudflared(
             name=container_name,
-            image="cloudflare/cloudflared:latest",
+            image=get_settings().cloudflared_image,
             token=token,
             networks=networks,
             labels=sidecar_labels,
@@ -726,7 +718,7 @@ async def recreate_tunnel(tunnel_id: str) -> dict[str, Any]:
 
     # 2. Find existing sidecar info before deleting
     from app.api.deps import get_docker_client
-    from app.clients.docker.helpers import get_networks, sidecar_name
+    from app.clients.docker.helpers import get_networks, resolve_compose_networks, sidecar_name
     from app.core import labels as lbl
 
     docker = get_docker_client()
@@ -802,11 +794,11 @@ async def recreate_tunnel(tunnel_id: str) -> dict[str, Any]:
     service = old_sidecar_service or tunnel_name
     container_name = sidecar_name(project, service)
 
-    networks = old_sidecar_networks if old_sidecar_networks else ["bridge"]
-    if not old_sidecar_networks and old_sidecar_project:
-        targets = await docker.find_by_compose(old_sidecar_project, old_sidecar_service)
-        if targets:
-            networks = [n for n in get_networks(targets[0]) if n != "bridge"] or ["bridge"]
+    networks = old_sidecar_networks or await resolve_compose_networks(
+        docker,
+        old_sidecar_project,
+        old_sidecar_service,
+    )
 
     sidecar_labels = {
         lbl.TUNNEL_ID: new_tunnel_id,
@@ -819,7 +811,7 @@ async def recreate_tunnel(tunnel_id: str) -> dict[str, Any]:
 
     new_sidecar = await docker.spawn_cloudflared(
         name=container_name,
-        image="cloudflare/cloudflared:latest",
+        image=get_settings().cloudflared_image,
         token=token,
         networks=networks,
         labels=sidecar_labels,

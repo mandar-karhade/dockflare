@@ -8,7 +8,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.clients.docker.helpers import sidecar_name
+from app.clients.docker.helpers import resolve_compose_networks, sidecar_name
 from app.core import labels as lbl
 from app.core.audit import audit_context
 from app.core.errors import NotFoundError
@@ -95,20 +95,11 @@ class TunnelService:
                 lbl.SIDECAR_ROLE: "cloudflared-sidecar",
             }
 
-            # Determine networks — if target project exists, join its network
-            networks: list[str] = []
-            if primary_compose_project and primary_compose_service:
-                targets = await self._docker.find_by_compose(
-                    primary_compose_project, primary_compose_service
-                )
-                if targets:
-                    from app.clients.docker.helpers import get_networks
-
-                    target_nets = get_networks(targets[0])
-                    networks.extend(target_nets)
-
-            if not networks:
-                networks = ["bridge"]
+            networks = await resolve_compose_networks(
+                self._docker,
+                primary_compose_project,
+                primary_compose_service,
+            )
 
             sidecar_attrs = await self._docker.spawn_cloudflared(
                 name=container_name,

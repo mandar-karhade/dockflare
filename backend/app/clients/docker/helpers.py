@@ -25,6 +25,34 @@ def get_networks(attrs: dict[str, Any]) -> list[str]:
     return list(networks.keys())
 
 
+async def resolve_compose_networks(
+    docker: Any,
+    compose_project: str | None,
+    compose_service: str | None = None,
+) -> list[str]:
+    """Find the Docker networks for a compose project.
+
+    Prefer an exact project/service match when available, then fall back to any
+    container in the compose project. This handles deployments where the tunnel
+    name is stored as the service hint instead of an actual compose service.
+    """
+    if not compose_project:
+        return []
+
+    targets: list[dict[str, Any]] = []
+    if compose_service:
+        targets = await docker.find_by_compose(compose_project, compose_service)
+    if not targets:
+        targets = await docker.find_by_compose(compose_project)
+
+    networks: list[str] = []
+    for target in targets:
+        for network in get_networks(target):
+            if network not in networks:
+                networks.append(network)
+    return [network for network in networks if network != "bridge"] or networks
+
+
 def get_exposed_ports(attrs: dict[str, Any]) -> list[int]:
     """Get TCP ports exposed by the container's image."""
     exposed = attrs.get("Config", {}).get("ExposedPorts") or {}
