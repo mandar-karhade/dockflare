@@ -490,14 +490,16 @@ describe("dashboard actions", () => {
   });
 
   test.each([
-    [{ target: false, hostname: true, path: false }, true],
-    [{ target: false, hostname: false, path: false }, false],
+    [{ target: false, hostname: true, path: false, tunnel: false, status: true }, true],
+    [{ target: false, hostname: false, path: false, tunnel: true, status: false }, false],
   ])("migrates legacy route visibility and reveals the editor", async (legacy, visible) => {
     window.sessionStorage.setItem("dockflare-dashboard-columns", JSON.stringify(legacy));
     renderApp();
 
     const row = (await screen.findByText("alpha-web-1")).closest("tr") as HTMLTableRowElement;
     expect(Boolean(screen.queryByRole("columnheader", { name: "Route" }))).toBe(visible);
+    expect(screen.getByRole("columnheader", { name: "Tunnel" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
     fireEvent.click(within(row).getByText("Edit"));
     expect(screen.getByRole("columnheader", { name: "Route" })).toBeInTheDocument();
     expect(within(row).getByLabelText("Target")).toHaveValue("http://web:8080");
