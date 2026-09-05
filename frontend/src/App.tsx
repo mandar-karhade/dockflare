@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Moon, Settings2, Sun } from "lucide-react";
 import { apiFetch } from "./api/client";
 import { useEffect, useState } from "react";
+import { version } from "../package.json";
 
 // ---- Types ----
 
@@ -794,6 +795,7 @@ export const App = () => {
       <header className="border-b">
         <div className="flex items-center gap-4 px-6 py-2">
           <h1 className="text-lg font-bold">Dockflare</h1>
+          <span className="font-mono text-xs text-muted-foreground" aria-label={`Dockflare version ${version}`}>{version}</span>
           {health && <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><StatusDot status="running" />connected</span>}
           <nav className="ml-6 flex gap-0.5 rounded-lg bg-muted p-0.5">
             {([["dashboard", "Dashboard"], ["zones", "Zones"]] as const).map(([k, l]) => (

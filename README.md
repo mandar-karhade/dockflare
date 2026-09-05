@@ -204,3 +204,7 @@ make format
 ## License
 
 MIT
+
+### Application version
+
+The header displays Dockflare's version beside its name and connection status, using `major.minor.patch` format (currently `0.1.0`). It is read from `frontend/package.json` at build time, so rebuild the frontend when changing the version. Keep the frontend package version, Python project version in `pyproject.toml`, and FastAPI version in `backend/app/main.py` aligned when making a release.
