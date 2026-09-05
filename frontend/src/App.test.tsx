@@ -489,26 +489,42 @@ describe("dashboard actions", () => {
     expect(window.localStorage.getItem("dockflare-theme")).toBe("light");
   });
 
+  test.each([
+    [{ target: false, hostname: true, path: false }, true],
+    [{ target: false, hostname: false, path: false }, false],
+  ])("migrates legacy route visibility and reveals the editor", async (legacy, visible) => {
+    window.sessionStorage.setItem("dockflare-dashboard-columns", JSON.stringify(legacy));
+    renderApp();
+
+    const row = (await screen.findByText("alpha-web-1")).closest("tr") as HTMLTableRowElement;
+    expect(Boolean(screen.queryByRole("columnheader", { name: "Route" }))).toBe(visible);
+    fireEvent.click(within(row).getByText("Edit"));
+    expect(screen.getByRole("columnheader", { name: "Route" })).toBeInTheDocument();
+    expect(within(row).getByLabelText("Target")).toHaveValue("http://web:8080");
+    expect(within(row).getByLabelText("Hostname")).toHaveValue("alpha.example.com");
+    expect(within(row).getByLabelText("Path")).toHaveValue("");
+  });
+
   test("hides dashboard columns for the session and resets the view", async () => {
     renderApp();
 
-    expect(await screen.findByRole("columnheader", { name: "Target" })).toBeInTheDocument();
+    expect(await screen.findByRole("columnheader", { name: "Route" })).toBeInTheDocument();
     fireEvent.click(screen.getByText("Columns"));
-    fireEvent.click(screen.getByLabelText("Target"));
+    fireEvent.click(screen.getByLabelText("Route"));
 
-    expect(screen.queryByRole("columnheader", { name: "Target" })).not.toBeInTheDocument();
-    expect(window.sessionStorage.getItem("dockflare-dashboard-columns")).toContain('"target":false');
+    expect(screen.queryByRole("columnheader", { name: "Route" })).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem("dockflare-dashboard-columns")).toContain('"route":false');
 
     cleanup();
     renderApp();
 
     await screen.findByText("alpha-tunnel");
-    expect(screen.queryByRole("columnheader", { name: "Target" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Route" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Columns"));
     fireEvent.click(screen.getByText("Reset View"));
 
-    expect(screen.getByRole("columnheader", { name: "Target" })).toBeInTheDocument();
-    expect(window.sessionStorage.getItem("dockflare-dashboard-columns")).toContain('"target":true');
+    expect(screen.getByRole("columnheader", { name: "Route" })).toBeInTheDocument();
+    expect(window.sessionStorage.getItem("dockflare-dashboard-columns")).toContain('"route":true');
   });
 });
