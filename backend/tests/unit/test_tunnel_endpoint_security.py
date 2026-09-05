@@ -82,7 +82,11 @@ class FakeTunnelCache:
 
 
 @pytest.mark.asyncio
-async def test_create_tunnel_uses_configured_cloudflared_image(monkeypatch) -> None:
+@pytest.mark.parametrize("image_override", [None, "cloudflare/cloudflared:custom"])
+async def test_create_tunnel_uses_configured_cloudflared_image(monkeypatch, image_override) -> None:
+    monkeypatch.delenv("TM_CLOUDFLARED_IMAGE", raising=False)
+    if image_override:
+        monkeypatch.setenv("TM_CLOUDFLARED_IMAGE", image_override)
     fake_docker = FakeDockerClient()
     monkeypatch.setattr(deps, "get_cf_client", lambda: FakeCloudflareClient())
     monkeypatch.setattr(deps, "get_docker_client", lambda: fake_docker)
@@ -94,14 +98,14 @@ async def test_create_tunnel_uses_configured_cloudflared_image(monkeypatch) -> N
         _env_file=None,
         DOCKFLARE_BASIC_AUTH_USER="",
         DOCKFLARE_BASIC_AUTH_PASSWORD="",
-        TM_CLOUDFLARED_IMAGE="cloudflare/cloudflared:2024.10.0",
     )
+    monkeypatch.setattr(tunnels_api, "get_settings", lambda: settings)
     transport = ASGITransport(app=create_app(settings))
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/api/v1/tunnels", json={"name": "demo"})
 
     assert response.status_code == 200
-    assert fake_docker.images == ["cloudflare/cloudflared:2024.10.0"]
+    assert fake_docker.images == [image_override or "cloudflare/cloudflared:2026.8.3"]
 
 
 @pytest.mark.asyncio

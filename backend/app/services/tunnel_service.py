@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.docker.helpers import resolve_compose_networks, sidecar_name
+from app.config import DEFAULT_CLOUDFLARED_IMAGE
 from app.core import labels as lbl
 from app.core.audit import audit_context
 from app.core.errors import NotFoundError
@@ -45,7 +46,7 @@ class TunnelService:
         rotation_policy: str = "manual",
         primary_compose_project: str | None = None,
         primary_compose_service: str | None = None,
-        cloudflared_image: str = "cloudflare/cloudflared:2024.10.0",
+        cloudflared_image: str = DEFAULT_CLOUDFLARED_IMAGE,
         actor: str = "system",
     ) -> Tunnel:
         """Create a CF tunnel, fetch token, spawn sidecar, record in DB."""

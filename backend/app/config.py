@@ -6,6 +6,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
+DEFAULT_CLOUDFLARED_IMAGE = "cloudflare/cloudflared:2026.8.3"
+
 
 class Settings(BaseSettings):
     """Dockflare configuration.
@@ -35,7 +37,7 @@ class Settings(BaseSettings):
     docker_host: str = "tcp://socket-proxy:2375"
 
     # Cloudflare
-    cloudflared_image: str = "cloudflare/cloudflared:2024.10.0"
+    cloudflared_image: str = DEFAULT_CLOUDFLARED_IMAGE
 
     # Rotation defaults
     rotation_jitter_hours: int = 2
