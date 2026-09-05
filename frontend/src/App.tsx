@@ -115,9 +115,7 @@ const DASHBOARD_COLUMNS = [
   { id: "container", label: "Container", canHide: true },
   { id: "service", label: "Service", canHide: true },
   { id: "ports", label: "Ports", canHide: true },
-  { id: "hostname", label: "Hostname", canHide: true },
-  { id: "target", label: "Target", canHide: true },
-  { id: "path", label: "Path", canHide: true },
+  { id: "route", label: "Route", canHide: true },
   { id: "actions", label: "Actions", canHide: false },
 ] as const;
 
@@ -141,7 +139,11 @@ const getInitialDashboardColumns = (): DashboardColumnVisibility => {
   try {
     const stored = window.sessionStorage.getItem(DASHBOARD_COLUMN_STORAGE_KEY);
     if (!stored) return defaults;
-    const parsed = JSON.parse(stored) as Partial<Record<DashboardColumnId, unknown>>;
+    const parsed = JSON.parse(stored) as Partial<Record<DashboardColumnId | "hostname" | "target" | "path", unknown>>;
+    // Preserve the old route fields' combined visibility for existing sessions.
+    if (typeof parsed.route !== "boolean") {
+      parsed.route = [parsed.target, parsed.hostname, parsed.path].some((value) => value !== false);
+    }
     return DASHBOARD_COLUMNS.reduce<DashboardColumnVisibility>((columns, column) => {
       const storedValue = parsed[column.id];
       columns[column.id] = column.canHide && typeof storedValue === "boolean" ? storedValue : true;
@@ -266,14 +268,14 @@ const useServiceOptions = () => {
   return opts;
 };
 
-const ServicePicker = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => {
+const ServicePicker = ({ value, onChange, label }: { value: string; onChange: (v: string) => void; label?: string }) => {
   const options = useServiceOptions();
   const [open, setOpen] = useState(false);
   const grouped: Record<string, typeof options> = {};
   for (const o of options) (grouped[o.project] ??= []).push(o);
   return (
     <div className="relative">
-      <input value={value} onChange={(e) => onChange(e.target.value)} onFocus={() => setOpen(true)} placeholder="http://service:port" className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" />
+      <input aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} onFocus={() => setOpen(true)} placeholder="http://service:port" className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" />
       {open && options.length > 0 && (
         <div className="absolute left-0 top-full z-10 mt-1 max-h-48 w-72 overflow-y-auto rounded border bg-background shadow-lg">
           {Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([proj, os]) => (
@@ -296,8 +298,7 @@ const ServicePicker = ({ value, onChange }: { value: string; onChange: (v: strin
 
 type EditableRoute = { hostname: string; service: string; path: string };
 
-const routeInputClass = "w-full min-w-44 rounded border bg-background px-2 py-1 font-mono text-xs";
-const pathInputClass = "w-24 rounded border bg-background px-2 py-1 font-mono text-xs";
+const routeInputClass = "w-full rounded border bg-background px-2 py-1 font-mono text-xs";
 
 const sanitizeHostname = (value: string) => {
   const raw = value.trim();
@@ -314,6 +315,30 @@ const toApiRoute = (route: EditableRoute) => ({
   service: route.service.trim(),
   path: route.path.trim() || null,
 });
+
+const RouteCell = ({ route, editing, onChange }: {
+  route: EditableRoute;
+  editing: boolean;
+  onChange: (patch: Partial<EditableRoute>) => void;
+}) => (
+  <td className="w-64 min-w-44 max-w-64 px-3 py-1.5 align-top">
+    <div className="space-y-1 text-xs [overflow-wrap:anywhere]">
+      {editing ? (
+        <>
+          <ServicePicker label="Target" value={route.service} onChange={(service) => { onChange({ service }); }} />
+          <input aria-label="Hostname" value={route.hostname} onChange={(e) => { onChange({ hostname: e.target.value }); }} placeholder="app.example.com" className={routeInputClass} />
+          <input aria-label="Path" value={route.path} onChange={(e) => { onChange({ path: e.target.value }); }} placeholder="Path (optional)" className={routeInputClass} />
+        </>
+      ) : (
+        <>
+          <div className="font-mono text-muted-foreground">{route.service}</div>
+          {route.hostname && <a href={`https://${sanitizeHostname(route.hostname)}`} target="_blank" rel="noopener noreferrer" className="block text-primary hover:underline">{sanitizeHostname(route.hostname)}</a>}
+          {route.path && <div className="font-mono text-muted-foreground">{route.path}</div>}
+        </>
+      )}
+    </div>
+  </td>
+);
 
 // ---- Modals ----
 
@@ -510,6 +535,7 @@ const DashboardView = () => {
     );
   };
   const startEditing = (routeKey: string) => {
+    setVisibleColumns((current) => ({ ...current, route: true }));
     setEditingRouteKey(routeKey);
   };
   const isColumnVisible = (column: DashboardColumnId) => visibleColumns[column];
@@ -554,10 +580,8 @@ const DashboardView = () => {
               {isColumnVisible("container") && <th className="px-3 py-2 whitespace-nowrap">Container</th>}
               {isColumnVisible("service") && <th className="px-3 py-2 whitespace-nowrap">Service</th>}
               {isColumnVisible("ports") && <th className="px-3 py-2 whitespace-nowrap">Ports</th>}
-              {isColumnVisible("hostname") && <th className="px-3 py-2 whitespace-nowrap">Hostname</th>}
-              {isColumnVisible("target") && <th className="px-3 py-2 whitespace-nowrap">Target</th>}
-              {isColumnVisible("path") && <th className="px-3 py-2 whitespace-nowrap">Path</th>}
-              {isColumnVisible("actions") && <th className="px-3 py-2 whitespace-nowrap">Actions</th>}
+              {isColumnVisible("route") && <th className="px-3 py-2 whitespace-nowrap">Route</th>}
+              {isColumnVisible("actions") && <th className="sticky right-0 bg-muted px-3 py-2 whitespace-nowrap">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -604,8 +628,8 @@ const DashboardView = () => {
                         {p.project}
                       </td>}
                       {/* Network */}
-                      {isColumnVisible("network") && <td className="px-3 py-1.5 align-top font-mono text-xs text-muted-foreground whitespace-nowrap" rowSpan={rowCount}>
-                        {p.networks.join(", ") || "default"}
+                      {isColumnVisible("network") && <td className="w-40 max-w-40 px-3 py-1.5 align-top font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]" rowSpan={rowCount}>
+                        {p.networks.length ? p.networks.map((network) => <div key={network}>{network}</div>) : "default"}
                       </td>}
                     </>
                   )}
@@ -620,26 +644,12 @@ const DashboardView = () => {
                   {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs whitespace-nowrap">{c.service ?? "-"}</td>}
                   {/* Ports */}
                   {isColumnVisible("ports") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{c.ports.length > 0 ? c.ports.join(", ") : "-"}</td>}
-                  {/* Hostname */}
-                  {isColumnVisible("hostname") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? (
-                      <input value={draft.hostname} onChange={(e) => updateDraft(draftKey, initial, { hostname: e.target.value })} placeholder="app.example.com" className={routeInputClass} />
-                    ) : draft.hostname ? (
-                      <a href={`https://${sanitizeHostname(draft.hostname)}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{sanitizeHostname(draft.hostname)}</a>
-                    ) : <span className="text-xs text-muted-foreground">-</span>}
-                  </td>}
-                  {/* Target */}
-                  {isColumnVisible("target") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? <ServicePicker value={draft.service} onChange={(service) => updateDraft(draftKey, initial, { service })} /> : <span className="font-mono text-xs text-muted-foreground">{draft.service}</span>}
-                  </td>}
-                  {isColumnVisible("path") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? <input value={draft.path} onChange={(e) => updateDraft(draftKey, initial, { path: e.target.value })} placeholder="/api/*" className={pathInputClass} /> : <span className="font-mono text-xs text-muted-foreground">{draft.path || "-"}</span>}
-                  </td>}
+                  {isColumnVisible("route") && <RouteCell route={draft} editing={isEditing} onChange={(patch) => { updateDraft(draftKey, initial, patch); }} />}
                   {/* Actions */}
                   {isColumnVisible("actions") && (
-                    <td className="px-3 py-1.5 align-top whitespace-nowrap">
+                    <td className="sticky right-0 w-44 min-w-44 bg-background px-3 py-1.5 align-top">
                         {tunnel ? (
-                          <div className="flex gap-1">
+                          <div className="flex flex-wrap gap-1">
                           {isEditing ? (
                             <Btn onClick={() => saveRoute(draftKey, tunnel.tunnel_id, initial.service, draft)} disabled={isSaving} variant="primary">{isSaving ? "Saving..." : "Save"}</Btn>
                           ) : (
@@ -657,7 +667,7 @@ const DashboardView = () => {
               );});
             })}
 
-            {/* Unassociated tunnels (no local project) — column order: Tunnel, Status, Project, Network, Container, Service, Ports, Hostname, Target, Actions */}
+            {/* Unassociated tunnels (no local project) */}
             {tunnelsByMachine.filter((t) => !data.projects.some((p) => p.tunnel?.tunnel_id === t.tunnel_id)).map((t) => {
               const routes = t.routes;
               const rs = Math.max(routes.length, 1);
@@ -671,10 +681,8 @@ const DashboardView = () => {
                     {isColumnVisible("container") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("ports") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
-                    {isColumnVisible("hostname") && <td className="px-3 py-1.5 text-xs italic text-muted-foreground">no routes</td>}
-                    {isColumnVisible("target") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
-                    {isColumnVisible("path") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
-                    {isColumnVisible("actions") && <td className="px-3 py-1.5 whitespace-nowrap">
+                    {isColumnVisible("route") && <td className="px-3 py-1.5 text-xs italic text-muted-foreground">no routes</td>}
+                    {isColumnVisible("actions") && <td className="sticky right-0 w-44 min-w-44 bg-background px-3 py-1.5">
                       <span className="text-xs text-muted-foreground">-</span>
                     </td>}
                   </tr>
@@ -699,18 +707,10 @@ const DashboardView = () => {
                   {isColumnVisible("container") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                   {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs text-muted-foreground whitespace-nowrap">{r.service.replace("http://", "").replace("https://", "").split(":")[0]}</td>}
                   {isColumnVisible("ports") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">{r.service.includes(":") ? r.service.split(":").pop()?.split("/")[0] : "-"}</td>}
-                  {isColumnVisible("hostname") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? <input value={draft.hostname} onChange={(e) => updateDraft(draftKey, initial, { hostname: e.target.value })} className={routeInputClass} /> : <a href={`https://${sanitizeHostname(draft.hostname)}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{sanitizeHostname(draft.hostname)}</a>}
-                  </td>}
-                  {isColumnVisible("target") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? <ServicePicker value={draft.service} onChange={(service) => updateDraft(draftKey, initial, { service })} /> : <span className="font-mono text-xs text-muted-foreground">{draft.service}</span>}
-                  </td>}
-                  {isColumnVisible("path") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? <input value={draft.path} onChange={(e) => updateDraft(draftKey, initial, { path: e.target.value })} className={pathInputClass} /> : <span className="font-mono text-xs text-muted-foreground">{draft.path || "-"}</span>}
-                  </td>}
+                  {isColumnVisible("route") && <RouteCell route={draft} editing={isEditing} onChange={(patch) => { updateDraft(draftKey, initial, patch); }} />}
                   {isColumnVisible("actions") && (
-                    <td className="px-3 py-1.5 align-top whitespace-nowrap">
-                      <div className="flex gap-1">
+                    <td className="sticky right-0 w-44 min-w-44 bg-background px-3 py-1.5 align-top">
+                      <div className="flex flex-wrap gap-1">
                         {isEditing ? (
                           <Btn onClick={() => saveRoute(draftKey, t.tunnel_id, initial.service, draft)} disabled={isSaving} variant="primary">{isSaving ? "Saving..." : "Save"}</Btn>
                         ) : (
