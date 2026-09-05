@@ -132,6 +132,10 @@ The dashboard shows:
 
 ### 6. Managing Tunnels
 
+**cloudflared version:** New sidecars use `cloudflare/cloudflared:2026.8.3`, pinned to the [Cloudflare release](https://github.com/cloudflare/cloudflared/releases/tag/2026.8.3). Set `TM_CLOUDFLARED_IMAGE` to override it. The same default applies to tunnel creation, adoption, import, and recreation.
+
+Updating Dockflare or restarting an existing container does **not** change that container's image. To clear an unsupported-version warning on an existing connector, replace the cloudflared container using the new image and the existing tunnel token and Docker networks; preserve its Dockflare labels if it is managed by Dockflare. Verify the replacement connects before removing the old container. Cloudflare's [Docker update instructions](https://developers.cloudflare.com/tunnel/downloads/update-cloudflared/) describe this process. The dashboard's **Recreate** action also uses the configured image, but replaces the Cloudflare tunnel and updates DNS, so it is not a connector-only upgrade.
+
 **Adopting existing tunnels:** Your current tunnels appear automatically. To have Dockflare manage a tunnel's sidecar, remove `cloudflared` from that project's `docker-compose.yml` and use the "Recreate" button — Dockflare will spawn and manage the sidecar.
 
 **Creating new tunnels:** Click "New Tunnel", specify a name and optionally a target compose project/service.

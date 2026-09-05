@@ -79,6 +79,7 @@ async def test_create_tunnel_happy_path(
     assert tunnel.status == "active"
     assert tunnel.cf_tunnel_id is not None
     assert tunnel.cloudflared_container_id is not None
+    assert tunnel.cloudflared_image == "cloudflare/cloudflared:2026.8.3"
 
     # CF tunnel exists
     cf_tunnels = await fake_cf.list_tunnels("acc-1")
@@ -87,6 +88,7 @@ async def test_create_tunnel_happy_path(
     # Sidecar exists
     sidecars = await fake_docker.list_managed_sidecars()
     assert len(sidecars) == 1
+    assert sidecars[0]["Config"]["Image"] == tunnel.cloudflared_image
     assert sidecars[0]["Config"]["Labels"]["tunnel-manager.tunnel.id"] == str(tunnel.id)
 
 

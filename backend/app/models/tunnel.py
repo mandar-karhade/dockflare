@@ -6,6 +6,7 @@ from datetime import datetime
 
 from sqlmodel import Field
 
+from app.config import DEFAULT_CLOUDFLARED_IMAGE
 from app.models.base import TimestampMixin
 
 
@@ -27,7 +28,7 @@ class Tunnel(TimestampMixin, table=True):
     primary_compose_project: str | None = Field(default=None)
     primary_compose_service: str | None = Field(default=None)
     cloudflared_container_id: str | None = Field(default=None)
-    cloudflared_image: str = Field(default="cloudflare/cloudflared:2024.10.0")
+    cloudflared_image: str = Field(default=DEFAULT_CLOUDFLARED_IMAGE)
     # Rotation
     rotation_policy: str = Field(default="manual", nullable=False)
     next_rotation_due: datetime | None = Field(default=None)
