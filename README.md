@@ -6,6 +6,23 @@ One dashboard to manage all your tunnels, routes, and cloudflared sidecars acros
 
 ![Dockflare Dashboard](docs/images/demo.png)
 
+## Deploying main or dev
+
+Run from your local Git checkout with `.env` beside `deploy.sh`:
+
+```bash
+./deploy.sh --host m@192.168.0.161          # origin/main by default
+./deploy.sh --main --host m@192.168.0.161   # explicit main
+./deploy.sh --dev --host m@192.168.0.161    # origin/dev
+./deploy.sh --dev --host m@192.168.0.161 frontend
+```
+
+The script fetches the selected branch from `origin` and deploys a temporary snapshot of that exact commit. It prints the branch, commit, and destination before confirmation. Your current branch and uncommitted edits are left untouched; `--dev` does not commit or push local work to GitHub. The local `.env` is copied separately. Both branch flags cannot be used together.
+
+`--sync-only`, component selection (`backend` or `frontend`), `--app-dir`, and the existing host/directory environment overrides remain available. Both branches deploy to the same destination unless you explicitly change the host or app directory. `--setup` only prepares the remote host and does not fetch or deploy either branch.
+
+A committed `frontend/package-lock.json` is used when available. For older branches without one, the script requires local npm and generates a lockfile from the selected branch's manifest in the temporary directory, with package scripts disabled. It never copies your working tree's lockfile. Without a committed lockfile, dependency versions can vary within the manifest's allowed ranges. Temporary source files are removed on completion, failure, or interruption.
+
 ## Why
 
 If you run multiple projects on a VPS with Cloudflare Tunnels, you probably have this:
@@ -132,6 +149,10 @@ The dashboard shows:
 
 ### 6. Managing Tunnels
 
+**cloudflared version:** New sidecars use `cloudflare/cloudflared:2026.8.3`, pinned to the [Cloudflare release](https://github.com/cloudflare/cloudflared/releases/tag/2026.8.3). Set `TM_CLOUDFLARED_IMAGE` to override it. The same default applies to tunnel creation, adoption, import, and recreation.
+
+Updating Dockflare or restarting an existing container does **not** change that container's image. To clear an unsupported-version warning on an existing connector, replace the cloudflared container using the new image and the existing tunnel token and Docker networks; preserve its Dockflare labels if it is managed by Dockflare. Verify the replacement connects before removing the old container. Cloudflare's [Docker update instructions](https://developers.cloudflare.com/tunnel/downloads/update-cloudflared/) describe this process. The dashboard's **Recreate** action also uses the configured image, but replaces the Cloudflare tunnel and updates DNS, so it is not a connector-only upgrade.
+
 **Adopting existing tunnels:** Your current tunnels appear automatically. To have Dockflare manage a tunnel's sidecar, remove `cloudflared` from that project's `docker-compose.yml` and use the "Recreate" button — Dockflare will spawn and manage the sidecar.
 
 **Creating new tunnels:** Click "New Tunnel", specify a name and optionally a target compose project/service.
@@ -200,3 +221,7 @@ make format
 ## License
 
 MIT
+
+### Application version
+
+The header displays Dockflare's version beside its name and connection status, using `major.minor.patch` format (currently `0.1.0`). It is read from `frontend/package.json` at build time, so rebuild the frontend when changing the version. Keep the frontend package version, Python project version in `pyproject.toml`, and FastAPI version in `backend/app/main.py` aligned when making a release.

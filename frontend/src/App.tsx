@@ -1,7 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Moon, Settings2, Sun } from "lucide-react";
+import { Check, Download, LoaderCircle, Moon, Pencil, RefreshCw, RotateCcw, Settings2, Sun, Trash2, type LucideIcon } from "lucide-react";
 import { apiFetch } from "./api/client";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { createPortal } from "react-dom";
+import { version } from "../package.json";
 
 // ---- Types ----
 
@@ -109,15 +111,11 @@ const DASHBOARD_COLUMN_STORAGE_KEY = "dockflare-dashboard-columns";
 
 const DASHBOARD_COLUMNS = [
   { id: "tunnel", label: "Tunnel", canHide: true },
-  { id: "status", label: "Status", canHide: true },
-  { id: "project", label: "Project", canHide: true },
   { id: "network", label: "Network", canHide: true },
   { id: "container", label: "Container", canHide: true },
   { id: "service", label: "Service", canHide: true },
   { id: "ports", label: "Ports", canHide: true },
-  { id: "hostname", label: "Hostname", canHide: true },
-  { id: "target", label: "Target", canHide: true },
-  { id: "path", label: "Path", canHide: true },
+  { id: "route", label: "Route", canHide: true },
   { id: "actions", label: "Actions", canHide: false },
 ] as const;
 
@@ -141,7 +139,17 @@ const getInitialDashboardColumns = (): DashboardColumnVisibility => {
   try {
     const stored = window.sessionStorage.getItem(DASHBOARD_COLUMN_STORAGE_KEY);
     if (!stored) return defaults;
-    const parsed = JSON.parse(stored) as Partial<Record<DashboardColumnId, unknown>>;
+    const parsed = JSON.parse(stored) as Partial<Record<DashboardColumnId | "project" | "status" | "hostname" | "target" | "path", unknown>>;
+    if (typeof parsed.status === "boolean") {
+      parsed.tunnel = parsed.tunnel !== false || parsed.status;
+    }
+    if (typeof parsed.project === "boolean") {
+      parsed.tunnel = parsed.tunnel !== false || parsed.project;
+    }
+    // Preserve the old route fields' combined visibility for existing sessions.
+    if (typeof parsed.route !== "boolean") {
+      parsed.route = [parsed.target, parsed.hostname, parsed.path].some((value) => value !== false);
+    }
     return DASHBOARD_COLUMNS.reduce<DashboardColumnVisibility>((columns, column) => {
       const storedValue = parsed[column.id];
       columns[column.id] = column.canHide && typeof storedValue === "boolean" ? storedValue : true;
@@ -226,6 +234,14 @@ const StatusDot = ({ status }: { status: string }) => {
   return <Dot color={c} />;
 };
 
+const TunnelSummary = ({ tunnel }: { tunnel: Pick<ProjectTunnel, "name" | "status" | "connections" | "machine"> }) => (
+  <div>
+    <span className={`text-xs font-medium ${tunnel.status === "connected" ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}>{tunnel.name}</span>
+    <div className="text-xs text-muted-foreground">{tunnel.status === "connected" ? `connected · ${String(tunnel.connections)} Cloudflare connection${tunnel.connections === 1 ? "" : "s"}` : "offline"}</div>
+    {tunnel.machine !== "unknown" && <div className="font-mono text-[10px] text-muted-foreground">{tunnel.machine}</div>}
+  </div>
+);
+
 const Modal = ({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) => {
   if (!open) return null;
   return (
@@ -248,6 +264,63 @@ const Btn = ({ children, onClick, variant = "default", disabled }: {
   return <button onClick={onClick} disabled={disabled} className={`rounded border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${v}`}>{children}</button>;
 };
 
+const ActionIcon = ({ label, icon: Icon, onClick, disabled, busy, tone = "default" }: {
+  label: string;
+  icon: LucideIcon;
+  onClick: () => void;
+  disabled?: boolean;
+  busy?: boolean;
+  tone?: "default" | "danger" | "warning";
+}) => {
+  const tooltipId = useId();
+  const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
+  const showTooltip = (event: React.SyntheticEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setPosition({ top: rect.bottom + 36 > window.innerHeight ? rect.top - 32 : rect.bottom + 6, right: window.innerWidth - rect.right });
+  };
+  useEffect(() => {
+    if (!position) return;
+    const close = () => { setPosition(null); };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [position]);
+  const color = {
+    default: "text-muted-foreground hover:text-foreground",
+    danger: "text-red-600 dark:text-red-400",
+    warning: "text-amber-700 dark:text-amber-400",
+  }[tone];
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={label}
+        aria-describedby={position ? tooltipId : undefined}
+        aria-busy={busy || undefined}
+        disabled={disabled}
+        onMouseEnter={showTooltip}
+        onMouseLeave={() => { setPosition(null); }}
+        onFocus={showTooltip}
+        onBlur={() => { setPosition(null); }}
+        onKeyDown={(event) => { if (event.key === "Escape") setPosition(null); }}
+        onClick={() => { setPosition(null); onClick(); }}
+        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${color}`}
+      >
+        {busy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Icon className="h-4 w-4" aria-hidden="true" />}
+      </button>
+      {position && createPortal(
+        <div id={tooltipId} role="tooltip" style={position} className="pointer-events-none fixed z-50 rounded border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-sm">
+          {label}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+};
+
 // ---- Service Picker ----
 
 const useServiceOptions = () => {
@@ -266,14 +339,14 @@ const useServiceOptions = () => {
   return opts;
 };
 
-const ServicePicker = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => {
+const ServicePicker = ({ value, onChange, label }: { value: string; onChange: (v: string) => void; label?: string }) => {
   const options = useServiceOptions();
   const [open, setOpen] = useState(false);
   const grouped: Record<string, typeof options> = {};
   for (const o of options) (grouped[o.project] ??= []).push(o);
   return (
     <div className="relative">
-      <input value={value} onChange={(e) => onChange(e.target.value)} onFocus={() => setOpen(true)} placeholder="http://service:port" className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" />
+      <input aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} onFocus={() => setOpen(true)} placeholder="http://service:port" className="w-full rounded border bg-background px-2 py-1 font-mono text-xs" />
       {open && options.length > 0 && (
         <div className="absolute left-0 top-full z-10 mt-1 max-h-48 w-72 overflow-y-auto rounded border bg-background shadow-lg">
           {Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([proj, os]) => (
@@ -296,8 +369,7 @@ const ServicePicker = ({ value, onChange }: { value: string; onChange: (v: strin
 
 type EditableRoute = { hostname: string; service: string; path: string };
 
-const routeInputClass = "w-full min-w-44 rounded border bg-background px-2 py-1 font-mono text-xs";
-const pathInputClass = "w-24 rounded border bg-background px-2 py-1 font-mono text-xs";
+const routeInputClass = "w-full rounded border bg-background px-2 py-1 font-mono text-xs";
 
 const sanitizeHostname = (value: string) => {
   const raw = value.trim();
@@ -314,6 +386,30 @@ const toApiRoute = (route: EditableRoute) => ({
   service: route.service.trim(),
   path: route.path.trim() || null,
 });
+
+const RouteCell = ({ route, editing, onChange }: {
+  route: EditableRoute;
+  editing: boolean;
+  onChange: (patch: Partial<EditableRoute>) => void;
+}) => (
+  <td className="w-64 min-w-44 max-w-64 px-3 py-1.5 align-top">
+    <div className="space-y-1 text-xs [overflow-wrap:anywhere]">
+      {editing ? (
+        <>
+          <ServicePicker label="Target" value={route.service} onChange={(service) => { onChange({ service }); }} />
+          <input aria-label="Hostname" value={route.hostname} onChange={(e) => { onChange({ hostname: e.target.value }); }} placeholder="app.example.com" className={routeInputClass} />
+          <input aria-label="Path" value={route.path} onChange={(e) => { onChange({ path: e.target.value }); }} placeholder="Path (optional)" className={routeInputClass} />
+        </>
+      ) : (
+        <>
+          <div className="font-mono text-muted-foreground">{route.service}</div>
+          {route.hostname && <a href={`https://${sanitizeHostname(route.hostname)}`} target="_blank" rel="noopener noreferrer" className="block text-primary hover:underline">{sanitizeHostname(route.hostname)}</a>}
+          {route.path && <div className="font-mono text-muted-foreground">{route.path}</div>}
+        </>
+      )}
+    </div>
+  </td>
+);
 
 // ---- Modals ----
 
@@ -510,6 +606,7 @@ const DashboardView = () => {
     );
   };
   const startEditing = (routeKey: string) => {
+    setVisibleColumns((current) => ({ ...current, route: true }));
     setEditingRouteKey(routeKey);
   };
   const isColumnVisible = (column: DashboardColumnId) => visibleColumns[column];
@@ -548,16 +645,12 @@ const DashboardView = () => {
           <thead className="sticky top-0 z-10">
             <tr className="border-b bg-muted text-left text-xs font-medium text-muted-foreground">
               {isColumnVisible("tunnel") && <th className="px-3 py-2 whitespace-nowrap">Tunnel</th>}
-              {isColumnVisible("status") && <th className="px-3 py-2 whitespace-nowrap">Status</th>}
-              {isColumnVisible("project") && <th className="px-3 py-2 whitespace-nowrap">Project</th>}
               {isColumnVisible("network") && <th className="px-3 py-2 whitespace-nowrap">Network</th>}
               {isColumnVisible("container") && <th className="px-3 py-2 whitespace-nowrap">Container</th>}
               {isColumnVisible("service") && <th className="px-3 py-2 whitespace-nowrap">Service</th>}
               {isColumnVisible("ports") && <th className="px-3 py-2 whitespace-nowrap">Ports</th>}
-              {isColumnVisible("hostname") && <th className="px-3 py-2 whitespace-nowrap">Hostname</th>}
-              {isColumnVisible("target") && <th className="px-3 py-2 whitespace-nowrap">Target</th>}
-              {isColumnVisible("path") && <th className="px-3 py-2 whitespace-nowrap">Path</th>}
-              {isColumnVisible("actions") && <th className="px-3 py-2 whitespace-nowrap">Actions</th>}
+              {isColumnVisible("route") && <th className="px-3 py-2 whitespace-nowrap">Route</th>}
+              {isColumnVisible("actions") && <th className="sticky right-0 bg-muted px-3 py-2 whitespace-nowrap">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -579,33 +672,20 @@ const DashboardView = () => {
                   {idx === 0 && (
                     <>
                       {/* Tunnel */}
-                      {isColumnVisible("tunnel") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
+                      {isColumnVisible("tunnel") && <td className="w-60 max-w-60 px-3 py-1.5 align-top [overflow-wrap:anywhere]" rowSpan={rowCount}>
+                        <div className="mb-1 text-xs font-semibold">{p.project}</div>
                         {tunnel ? (
                           <div>
-                            <span className="text-xs font-medium">{tunnel.name}</span>
-                            <div className="font-mono text-[10px] text-muted-foreground">{tunnel.machine !== "unknown" ? tunnel.machine : ""}</div>
+                            <TunnelSummary tunnel={tunnel} />
                             <div className="mt-1">
                               <Btn onClick={() => setConfirmDelete(tunnel.tunnel_id)} variant="danger">Delete Tunnel</Btn>
                             </div>
                           </div>
                         ) : <Btn onClick={() => openProjectCreate(p)} variant="ghost">Create New</Btn>}
                       </td>}
-                      {/* Status */}
-                      {isColumnVisible("status") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
-                        {tunnel ? (
-                          <div className="flex items-center gap-1.5">
-                            <StatusDot status={tunnel.status} />
-                            <span className="text-xs">{tunnel.status === "connected" ? `${String(tunnel.connections)} conn` : "offline"}</span>
-                          </div>
-                        ) : <span className="text-xs text-muted-foreground">-</span>}
-                      </td>}
-                      {/* Project */}
-                      {isColumnVisible("project") && <td className="px-3 py-1.5 align-top font-medium whitespace-nowrap" rowSpan={rowCount}>
-                        {p.project}
-                      </td>}
                       {/* Network */}
-                      {isColumnVisible("network") && <td className="px-3 py-1.5 align-top font-mono text-xs text-muted-foreground whitespace-nowrap" rowSpan={rowCount}>
-                        {p.networks.join(", ") || "default"}
+                      {isColumnVisible("network") && <td className="w-40 max-w-40 px-3 py-1.5 align-top font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]" rowSpan={rowCount}>
+                        {p.networks.length ? p.networks.map((network) => <div key={network}>{network}</div>) : "default"}
                       </td>}
                     </>
                   )}
@@ -620,35 +700,22 @@ const DashboardView = () => {
                   {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs whitespace-nowrap">{c.service ?? "-"}</td>}
                   {/* Ports */}
                   {isColumnVisible("ports") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{c.ports.length > 0 ? c.ports.join(", ") : "-"}</td>}
-                  {/* Hostname */}
-                  {isColumnVisible("hostname") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? (
-                      <input value={draft.hostname} onChange={(e) => updateDraft(draftKey, initial, { hostname: e.target.value })} placeholder="app.example.com" className={routeInputClass} />
-                    ) : draft.hostname ? (
-                      <a href={`https://${sanitizeHostname(draft.hostname)}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{sanitizeHostname(draft.hostname)}</a>
-                    ) : <span className="text-xs text-muted-foreground">-</span>}
-                  </td>}
-                  {/* Target */}
-                  {isColumnVisible("target") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? <ServicePicker value={draft.service} onChange={(service) => updateDraft(draftKey, initial, { service })} /> : <span className="font-mono text-xs text-muted-foreground">{draft.service}</span>}
-                  </td>}
-                  {isColumnVisible("path") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? <input value={draft.path} onChange={(e) => updateDraft(draftKey, initial, { path: e.target.value })} placeholder="/api/*" className={pathInputClass} /> : <span className="font-mono text-xs text-muted-foreground">{draft.path || "-"}</span>}
-                  </td>}
+                  {isColumnVisible("route") && <RouteCell route={draft} editing={isEditing} onChange={(patch) => { updateDraft(draftKey, initial, patch); }} />}
                   {/* Actions */}
                   {isColumnVisible("actions") && (
-                    <td className="px-3 py-1.5 align-top whitespace-nowrap">
+                    <td className="sticky right-0 w-44 min-w-44 bg-background px-2 py-1.5 align-top">
                         {tunnel ? (
-                          <div className="flex gap-1">
+                          <div className="flex items-center gap-0.5">
                           {isEditing ? (
-                            <Btn onClick={() => saveRoute(draftKey, tunnel.tunnel_id, initial.service, draft)} disabled={isSaving} variant="primary">{isSaving ? "Saving..." : "Save"}</Btn>
+                            <ActionIcon label={isSaving ? "Saving route" : "Save route"} icon={Check} busy={isSaving} disabled={isSaving} onClick={() => { saveRoute(draftKey, tunnel.tunnel_id, initial.service, draft); }} />
                           ) : (
-                            <Btn onClick={() => startEditing(draftKey)} variant="ghost">Edit</Btn>
+                            <ActionIcon label="Edit route" icon={Pencil} onClick={() => { startEditing(draftKey); }} />
                           )}
-                          <Btn onClick={() => deleteRoute(draftKey, tunnel.tunnel_id, initial.service)} disabled={isSaving} variant="danger">Delete Route</Btn>
-                          <Btn onClick={() => void handleExport(tunnel.tunnel_id)} variant="ghost">Export</Btn>
-                          <Btn onClick={() => refreshTunnelMut.mutate(tunnel.tunnel_id)} disabled={refreshTunnelMut.isPending} variant="ghost">{refreshTunnelMut.isPending ? "Refreshing..." : "Refresh"}</Btn>
-                          <Btn onClick={() => setConfirmRecreate(tunnel.tunnel_id)} variant="ghost">Recreate</Btn>
+                          <ActionIcon label="Delete route" icon={Trash2} tone="danger" disabled={isSaving} onClick={() => { deleteRoute(draftKey, tunnel.tunnel_id, initial.service); }} />
+                          <span className="mx-0.5 h-4 border-l" aria-hidden="true" />
+                          <ActionIcon label="Export tunnel configuration" icon={Download} onClick={() => { void handleExport(tunnel.tunnel_id); }} />
+                          <ActionIcon label={refreshTunnelMut.isPending ? "Refreshing tunnel status" : "Refresh tunnel status"} icon={RefreshCw} busy={refreshTunnelMut.isPending} disabled={refreshTunnelMut.isPending} onClick={() => { refreshTunnelMut.mutate(tunnel.tunnel_id); }} />
+                          <ActionIcon label="Recreate tunnel" icon={RotateCcw} tone="warning" onClick={() => { setConfirmRecreate(tunnel.tunnel_id); }} />
                         </div>
                       ) : <span className="text-xs text-muted-foreground">-</span>}
                     </td>
@@ -657,24 +724,20 @@ const DashboardView = () => {
               );});
             })}
 
-            {/* Unassociated tunnels (no local project) — column order: Tunnel, Status, Project, Network, Container, Service, Ports, Hostname, Target, Actions */}
+            {/* Unassociated tunnels (no local project) */}
             {tunnelsByMachine.filter((t) => !data.projects.some((p) => p.tunnel?.tunnel_id === t.tunnel_id)).map((t) => {
               const routes = t.routes;
               const rs = Math.max(routes.length, 1);
               if (routes.length === 0) {
                 return (
                   <tr key={t.tunnel_id} className="hover:bg-muted/30 bg-muted/10">
-                    {isColumnVisible("tunnel") && <td className="px-3 py-1.5 whitespace-nowrap"><span className="text-xs font-medium">{t.name}</span><div className="font-mono text-[10px] text-muted-foreground">{t.machine !== "unknown" ? t.machine : ""}</div></td>}
-                    {isColumnVisible("status") && <td className="px-3 py-1.5"><div className="flex items-center gap-1.5"><StatusDot status={t.status} /><span className="text-xs">{t.status === "connected" ? `${String(t.connections)} conn` : "offline"}</span></div></td>}
-                    {isColumnVisible("project") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
+                    {isColumnVisible("tunnel") && <td className="w-60 max-w-60 px-3 py-1.5 align-top [overflow-wrap:anywhere]"><TunnelSummary tunnel={t} /></td>}
                     {isColumnVisible("network") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("container") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("ports") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
-                    {isColumnVisible("hostname") && <td className="px-3 py-1.5 text-xs italic text-muted-foreground">no routes</td>}
-                    {isColumnVisible("target") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
-                    {isColumnVisible("path") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
-                    {isColumnVisible("actions") && <td className="px-3 py-1.5 whitespace-nowrap">
+                    {isColumnVisible("route") && <td className="px-3 py-1.5 text-xs italic text-muted-foreground">no routes</td>}
+                    {isColumnVisible("actions") && <td className="sticky right-0 w-44 min-w-44 bg-background px-2 py-1.5">
                       <span className="text-xs text-muted-foreground">-</span>
                     </td>}
                   </tr>
@@ -690,33 +753,23 @@ const DashboardView = () => {
                 <tr key={`${t.tunnel_id}-${String(idx)}`} className="hover:bg-muted/30 bg-muted/10">
                   {idx === 0 && (
                     <>
-                      {isColumnVisible("tunnel") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}><span className="text-xs font-medium">{t.name}</span><div className="font-mono text-[10px] text-muted-foreground">{t.machine !== "unknown" ? t.machine : ""}</div></td>}
-                      {isColumnVisible("status") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}><div className="flex items-center gap-1.5"><StatusDot status={t.status} /><span className="text-xs">{t.status === "connected" ? `${String(t.connections)} conn` : "offline"}</span></div></td>}
-                      {isColumnVisible("project") && <td className="px-3 py-1.5 align-top text-xs text-muted-foreground" rowSpan={rs}>-</td>}
+                      {isColumnVisible("tunnel") && <td className="w-60 max-w-60 px-3 py-1.5 align-top [overflow-wrap:anywhere]" rowSpan={rs}><TunnelSummary tunnel={t} /></td>}
                       {isColumnVisible("network") && <td className="px-3 py-1.5 align-top text-xs text-muted-foreground" rowSpan={rs}>-</td>}
                     </>
                   )}
                   {isColumnVisible("container") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                   {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs text-muted-foreground whitespace-nowrap">{r.service.replace("http://", "").replace("https://", "").split(":")[0]}</td>}
                   {isColumnVisible("ports") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">{r.service.includes(":") ? r.service.split(":").pop()?.split("/")[0] : "-"}</td>}
-                  {isColumnVisible("hostname") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? <input value={draft.hostname} onChange={(e) => updateDraft(draftKey, initial, { hostname: e.target.value })} className={routeInputClass} /> : <a href={`https://${sanitizeHostname(draft.hostname)}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">{sanitizeHostname(draft.hostname)}</a>}
-                  </td>}
-                  {isColumnVisible("target") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? <ServicePicker value={draft.service} onChange={(service) => updateDraft(draftKey, initial, { service })} /> : <span className="font-mono text-xs text-muted-foreground">{draft.service}</span>}
-                  </td>}
-                  {isColumnVisible("path") && <td className="px-3 py-1.5 whitespace-nowrap">
-                    {isEditing ? <input value={draft.path} onChange={(e) => updateDraft(draftKey, initial, { path: e.target.value })} className={pathInputClass} /> : <span className="font-mono text-xs text-muted-foreground">{draft.path || "-"}</span>}
-                  </td>}
+                  {isColumnVisible("route") && <RouteCell route={draft} editing={isEditing} onChange={(patch) => { updateDraft(draftKey, initial, patch); }} />}
                   {isColumnVisible("actions") && (
-                    <td className="px-3 py-1.5 align-top whitespace-nowrap">
-                      <div className="flex gap-1">
+                    <td className="sticky right-0 w-44 min-w-44 bg-background px-2 py-1.5 align-top">
+                      <div className="flex items-center gap-0.5">
                         {isEditing ? (
-                          <Btn onClick={() => saveRoute(draftKey, t.tunnel_id, initial.service, draft)} disabled={isSaving} variant="primary">{isSaving ? "Saving..." : "Save"}</Btn>
+                          <ActionIcon label={isSaving ? "Saving route" : "Save route"} icon={Check} busy={isSaving} disabled={isSaving} onClick={() => { saveRoute(draftKey, t.tunnel_id, initial.service, draft); }} />
                         ) : (
-                          <Btn onClick={() => startEditing(draftKey)} variant="ghost">Edit</Btn>
+                          <ActionIcon label="Edit route" icon={Pencil} onClick={() => { startEditing(draftKey); }} />
                         )}
-                        <Btn onClick={() => deleteRoute(draftKey, t.tunnel_id, initial.service)} disabled={isSaving} variant="danger">Delete Route</Btn>
+                        <ActionIcon label="Delete route" icon={Trash2} tone="danger" disabled={isSaving} onClick={() => { deleteRoute(draftKey, t.tunnel_id, initial.service); }} />
                       </div>
                     </td>
                   )}
@@ -794,6 +847,7 @@ export const App = () => {
       <header className="border-b">
         <div className="flex items-center gap-4 px-6 py-2">
           <h1 className="text-lg font-bold">Dockflare</h1>
+          <span className="font-mono text-xs text-muted-foreground" aria-label={`Dockflare version ${version}`}>{version}</span>
           {health && <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><StatusDot status="running" />connected</span>}
           <nav className="ml-6 flex gap-0.5 rounded-lg bg-muted p-0.5">
             {([["dashboard", "Dashboard"], ["zones", "Zones"]] as const).map(([k, l]) => (
