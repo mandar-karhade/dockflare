@@ -110,7 +110,6 @@ const DASHBOARD_COLUMN_STORAGE_KEY = "dockflare-dashboard-columns";
 
 const DASHBOARD_COLUMNS = [
   { id: "tunnel", label: "Tunnel", canHide: true },
-  { id: "project", label: "Project", canHide: true },
   { id: "network", label: "Network", canHide: true },
   { id: "container", label: "Container", canHide: true },
   { id: "service", label: "Service", canHide: true },
@@ -139,9 +138,12 @@ const getInitialDashboardColumns = (): DashboardColumnVisibility => {
   try {
     const stored = window.sessionStorage.getItem(DASHBOARD_COLUMN_STORAGE_KEY);
     if (!stored) return defaults;
-    const parsed = JSON.parse(stored) as Partial<Record<DashboardColumnId | "status" | "hostname" | "target" | "path", unknown>>;
+    const parsed = JSON.parse(stored) as Partial<Record<DashboardColumnId | "project" | "status" | "hostname" | "target" | "path", unknown>>;
     if (typeof parsed.status === "boolean") {
       parsed.tunnel = parsed.tunnel !== false || parsed.status;
+    }
+    if (typeof parsed.project === "boolean") {
+      parsed.tunnel = parsed.tunnel !== false || parsed.project;
     }
     // Preserve the old route fields' combined visibility for existing sessions.
     if (typeof parsed.route !== "boolean") {
@@ -234,7 +236,7 @@ const StatusDot = ({ status }: { status: string }) => {
 const TunnelSummary = ({ tunnel }: { tunnel: Pick<ProjectTunnel, "name" | "status" | "connections" | "machine"> }) => (
   <div>
     <span className={`text-xs font-medium ${tunnel.status === "connected" ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}>{tunnel.name}</span>
-    <div className="text-xs text-muted-foreground">{tunnel.status === "connected" ? `connected · ${String(tunnel.connections)} conn` : "offline"}</div>
+    <div className="text-xs text-muted-foreground">{tunnel.status === "connected" ? `connected · ${String(tunnel.connections)} Cloudflare connection${tunnel.connections === 1 ? "" : "s"}` : "offline"}</div>
     {tunnel.machine !== "unknown" && <div className="font-mono text-[10px] text-muted-foreground">{tunnel.machine}</div>}
   </div>
 );
@@ -585,7 +587,6 @@ const DashboardView = () => {
           <thead className="sticky top-0 z-10">
             <tr className="border-b bg-muted text-left text-xs font-medium text-muted-foreground">
               {isColumnVisible("tunnel") && <th className="px-3 py-2 whitespace-nowrap">Tunnel</th>}
-              {isColumnVisible("project") && <th className="px-3 py-2 whitespace-nowrap">Project</th>}
               {isColumnVisible("network") && <th className="px-3 py-2 whitespace-nowrap">Network</th>}
               {isColumnVisible("container") && <th className="px-3 py-2 whitespace-nowrap">Container</th>}
               {isColumnVisible("service") && <th className="px-3 py-2 whitespace-nowrap">Service</th>}
@@ -613,7 +614,8 @@ const DashboardView = () => {
                   {idx === 0 && (
                     <>
                       {/* Tunnel */}
-                      {isColumnVisible("tunnel") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rowCount}>
+                      {isColumnVisible("tunnel") && <td className="w-60 max-w-60 px-3 py-1.5 align-top [overflow-wrap:anywhere]" rowSpan={rowCount}>
+                        <div className="mb-1 text-xs font-semibold">{p.project}</div>
                         {tunnel ? (
                           <div>
                             <TunnelSummary tunnel={tunnel} />
@@ -622,10 +624,6 @@ const DashboardView = () => {
                             </div>
                           </div>
                         ) : <Btn onClick={() => openProjectCreate(p)} variant="ghost">Create New</Btn>}
-                      </td>}
-                      {/* Project */}
-                      {isColumnVisible("project") && <td className="px-3 py-1.5 align-top font-medium whitespace-nowrap" rowSpan={rowCount}>
-                        {p.project}
                       </td>}
                       {/* Network */}
                       {isColumnVisible("network") && <td className="w-40 max-w-40 px-3 py-1.5 align-top font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]" rowSpan={rowCount}>
@@ -674,8 +672,7 @@ const DashboardView = () => {
               if (routes.length === 0) {
                 return (
                   <tr key={t.tunnel_id} className="hover:bg-muted/30 bg-muted/10">
-                    {isColumnVisible("tunnel") && <td className="px-3 py-1.5 whitespace-nowrap"><TunnelSummary tunnel={t} /></td>}
-                    {isColumnVisible("project") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
+                    {isColumnVisible("tunnel") && <td className="w-60 max-w-60 px-3 py-1.5 align-top [overflow-wrap:anywhere]"><TunnelSummary tunnel={t} /></td>}
                     {isColumnVisible("network") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("container") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
@@ -697,8 +694,7 @@ const DashboardView = () => {
                 <tr key={`${t.tunnel_id}-${String(idx)}`} className="hover:bg-muted/30 bg-muted/10">
                   {idx === 0 && (
                     <>
-                      {isColumnVisible("tunnel") && <td className="px-3 py-1.5 align-top whitespace-nowrap" rowSpan={rs}><TunnelSummary tunnel={t} /></td>}
-                      {isColumnVisible("project") && <td className="px-3 py-1.5 align-top text-xs text-muted-foreground" rowSpan={rs}>-</td>}
+                      {isColumnVisible("tunnel") && <td className="w-60 max-w-60 px-3 py-1.5 align-top [overflow-wrap:anywhere]" rowSpan={rs}><TunnelSummary tunnel={t} /></td>}
                       {isColumnVisible("network") && <td className="px-3 py-1.5 align-top text-xs text-muted-foreground" rowSpan={rs}>-</td>}
                     </>
                   )}

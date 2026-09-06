@@ -491,7 +491,8 @@ describe("dashboard actions", () => {
 
   test.each([
     [{ target: false, hostname: true, path: false, tunnel: false, status: true }, true],
-    [{ target: false, hostname: false, path: false, tunnel: true, status: false }, false],
+    [{ target: false, hostname: true, path: false, tunnel: false, status: false, project: true }, true],
+    [{ target: false, hostname: false, path: false, tunnel: true, status: false, project: false }, false],
   ])("migrates legacy route visibility and reveals the editor", async (legacy, visible) => {
     window.sessionStorage.setItem("dockflare-dashboard-columns", JSON.stringify(legacy));
     renderApp();
@@ -500,6 +501,8 @@ describe("dashboard actions", () => {
     expect(Boolean(screen.queryByRole("columnheader", { name: "Route" }))).toBe(visible);
     expect(screen.getByRole("columnheader", { name: "Tunnel" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Project" })).not.toBeInTheDocument();
+    expect(within(row.cells[0] as HTMLTableCellElement).getByText("alpha")).toBeInTheDocument();
     fireEvent.click(within(row).getByText("Edit"));
     expect(screen.getByRole("columnheader", { name: "Route" })).toBeInTheDocument();
     expect(within(row).getByLabelText("Target")).toHaveValue("http://web:8080");
