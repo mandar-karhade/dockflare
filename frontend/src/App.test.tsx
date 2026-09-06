@@ -176,12 +176,35 @@ describe("dashboard actions", () => {
     const row = await screen.findByText("alpha-tunnel").then((node) => node.closest("tr"));
 
     expect(row).not.toBeNull();
-    expect(within(row as HTMLTableRowElement).getByText("Edit")).toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).getByText("Delete Route")).toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).getByText("Export")).toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).getByText("Refresh")).toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).getByText("Recreate")).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByRole("button", { name: "Edit route" })).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByRole("button", { name: "Delete route" })).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByRole("button", { name: "Export tunnel configuration" })).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByRole("button", { name: "Refresh tunnel status" })).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByRole("button", { name: "Recreate tunnel" })).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).getByText("Delete Tunnel")).toBeInTheDocument();
+  });
+
+  test("action descriptions appear on hover and keyboard focus and dismiss on Escape", async () => {
+    renderApp();
+    const row = (await screen.findByText("alpha-tunnel")).closest("tr") as HTMLTableRowElement;
+    const edit = within(row).getByRole("button", { name: "Edit route" });
+    fireEvent.mouseEnter(edit);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Edit route");
+    expect(row.contains(screen.getByRole("tooltip"))).toBe(false);
+    fireEvent.mouseLeave(edit);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    fireEvent.focus(edit);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Edit route");
+    fireEvent.keyDown(edit, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  test("recreate icon opens the existing confirmation without recreating the tunnel", async () => {
+    renderApp();
+    const row = (await screen.findByText("alpha-tunnel")).closest("tr") as HTMLTableRowElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Recreate tunnel" }));
+    expect(screen.getByRole("heading", { name: "Recreate Tunnel" })).toBeInTheDocument();
+    expect(mockApiFetch.mock.calls.some(([path]) => path.endsWith("/recreate"))).toBe(false);
   });
 
   test("shows project create once in the tunnel column for multiple services", async () => {
@@ -220,10 +243,10 @@ describe("dashboard actions", () => {
 
     expect(row).not.toBeNull();
     expect(within(row as HTMLTableRowElement).getByText("Create New")).toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).queryByText("Edit")).not.toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).queryByText("Export")).not.toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).queryByText("Refresh")).not.toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).queryByText("Recreate")).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByRole("button", { name: "Edit route" })).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByRole("button", { name: "Export tunnel configuration" })).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByRole("button", { name: "Refresh tunnel status" })).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByRole("button", { name: "Recreate tunnel" })).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Delete Tunnel")).not.toBeInTheDocument();
   });
 
@@ -291,10 +314,10 @@ describe("dashboard actions", () => {
 
     const row = await screen.findByText("alpha-web-1").then((node) => node.closest("tr"));
     expect(within(row as HTMLTableRowElement).queryByDisplayValue("alpha.example.com")).not.toBeInTheDocument();
-    fireEvent.click(within(row as HTMLTableRowElement).getByText("Edit"));
+    fireEvent.click(within(row as HTMLTableRowElement).getByRole("button", { name: "Edit route" }));
     const hostname = within(row as HTMLTableRowElement).getByDisplayValue("alpha.example.com");
     fireEvent.change(hostname, { target: { value: "https://app-stage.anywebalert.com" } });
-    fireEvent.click(within(row as HTMLTableRowElement).getByText("Save"));
+    fireEvent.click(within(row as HTMLTableRowElement).getByRole("button", { name: "Save route" }));
 
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith(
@@ -354,11 +377,11 @@ describe("dashboard actions", () => {
 
     const webRow = await screen.findByText("alpha-web-1").then((node) => node.closest("tr"));
     const apiRow = await screen.findByText("alpha-api-1").then((node) => node.closest("tr"));
-    fireEvent.click(within(webRow as HTMLTableRowElement).getByText("Edit"));
-    fireEvent.click(within(webRow as HTMLTableRowElement).getByText("Save"));
+    fireEvent.click(within(webRow as HTMLTableRowElement).getByRole("button", { name: "Edit route" }));
+    fireEvent.click(within(webRow as HTMLTableRowElement).getByRole("button", { name: "Save route" }));
 
-    expect(within(webRow as HTMLTableRowElement).getByText("Saving...")).toBeInTheDocument();
-    expect(within(apiRow as HTMLTableRowElement).getByText("Edit")).toBeInTheDocument();
+    expect(within(webRow as HTMLTableRowElement).getByRole("button", { name: "Saving route" })).toBeInTheDocument();
+    expect(within(apiRow as HTMLTableRowElement).getByRole("button", { name: "Edit route" })).toBeInTheDocument();
     expect(within(apiRow as HTMLTableRowElement).queryByDisplayValue("api.example.com")).not.toBeInTheDocument();
 
     resolveSave({ status: "updated" });
@@ -376,7 +399,7 @@ describe("dashboard actions", () => {
     renderApp();
 
     const row = await screen.findByText("alpha-web-1").then((node) => node.closest("tr"));
-    fireEvent.click(within(row as HTMLTableRowElement).getByText("Delete Route"));
+    fireEvent.click(within(row as HTMLTableRowElement).getByRole("button", { name: "Delete route" }));
 
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith(
@@ -416,10 +439,10 @@ describe("dashboard actions", () => {
     renderApp();
 
     const row = await screen.findByText("alpha-web-1").then((node) => node.closest("tr"));
-    fireEvent.click(within(row as HTMLTableRowElement).getByText("Edit"));
+    fireEvent.click(within(row as HTMLTableRowElement).getByRole("button", { name: "Edit route" }));
     fireEvent.focus(within(row as HTMLTableRowElement).getByDisplayValue("http://web:8080"));
     fireEvent.click(await screen.findByRole("button", { name: /api\s+http:\/\/api:3000/ }));
-    fireEvent.click(within(row as HTMLTableRowElement).getByText("Save"));
+    fireEvent.click(within(row as HTMLTableRowElement).getByRole("button", { name: "Save route" }));
 
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith(
@@ -441,15 +464,15 @@ describe("dashboard actions", () => {
 
     expect(row).not.toBeNull();
     expect(within(row as HTMLTableRowElement).queryByDisplayValue("orphan.example.com")).not.toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).getByText("Edit")).toBeInTheDocument();
-    fireEvent.click(within(row as HTMLTableRowElement).getByText("Edit"));
+    expect(within(row as HTMLTableRowElement).getByRole("button", { name: "Edit route" })).toBeInTheDocument();
+    fireEvent.click(within(row as HTMLTableRowElement).getByRole("button", { name: "Edit route" }));
     expect(within(row as HTMLTableRowElement).getByDisplayValue("orphan.example.com")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).getByDisplayValue("http://ghost:8080")).toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).getByText("Save")).toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).getByText("Delete Route")).toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).queryByText("Export")).not.toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).queryByText("Refresh")).not.toBeInTheDocument();
-    expect(within(row as HTMLTableRowElement).queryByText("Recreate")).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByRole("button", { name: "Save route" })).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByRole("button", { name: "Delete route" })).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByRole("button", { name: "Export tunnel configuration" })).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByRole("button", { name: "Refresh tunnel status" })).not.toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).queryByRole("button", { name: "Recreate tunnel" })).not.toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).queryByText("Delete Tunnel")).not.toBeInTheDocument();
   });
 
@@ -465,7 +488,7 @@ describe("dashboard actions", () => {
     renderApp();
 
     const row = await screen.findByText("alpha-tunnel").then((node) => node.closest("tr"));
-    fireEvent.click(within(row as HTMLTableRowElement).getByText("Refresh"));
+    fireEvent.click(within(row as HTMLTableRowElement).getByRole("button", { name: "Refresh tunnel status" }));
 
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith(
@@ -503,7 +526,7 @@ describe("dashboard actions", () => {
     expect(screen.queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Project" })).not.toBeInTheDocument();
     expect(within(row.cells[0] as HTMLTableCellElement).getByText("alpha")).toBeInTheDocument();
-    fireEvent.click(within(row).getByText("Edit"));
+    fireEvent.click(within(row).getByRole("button", { name: "Edit route" }));
     expect(screen.getByRole("columnheader", { name: "Route" })).toBeInTheDocument();
     expect(within(row).getByLabelText("Target")).toHaveValue("http://web:8080");
     expect(within(row).getByLabelText("Hostname")).toHaveValue("alpha.example.com");
