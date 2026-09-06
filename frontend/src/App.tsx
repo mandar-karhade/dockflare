@@ -1,7 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Moon, Settings2, Sun } from "lucide-react";
+import { Check, Download, LoaderCircle, Moon, Pencil, RefreshCw, RotateCcw, Settings2, Sun, Trash2, type LucideIcon } from "lucide-react";
 import { apiFetch } from "./api/client";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { createPortal } from "react-dom";
 import { version } from "../package.json";
 
 // ---- Types ----
@@ -261,6 +262,63 @@ const Btn = ({ children, onClick, variant = "default", disabled }: {
 }) => {
   const v = { default: "border hover:bg-muted", primary: "bg-primary text-primary-foreground hover:bg-primary/90", danger: "text-red-500 hover:bg-red-50 dark:hover:bg-red-950 border-transparent", ghost: "text-primary hover:bg-primary/10 border-transparent" }[variant];
   return <button onClick={onClick} disabled={disabled} className={`rounded border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${v}`}>{children}</button>;
+};
+
+const ActionIcon = ({ label, icon: Icon, onClick, disabled, busy, tone = "default" }: {
+  label: string;
+  icon: LucideIcon;
+  onClick: () => void;
+  disabled?: boolean;
+  busy?: boolean;
+  tone?: "default" | "danger" | "warning";
+}) => {
+  const tooltipId = useId();
+  const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
+  const showTooltip = (event: React.SyntheticEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setPosition({ top: rect.bottom + 36 > window.innerHeight ? rect.top - 32 : rect.bottom + 6, right: window.innerWidth - rect.right });
+  };
+  useEffect(() => {
+    if (!position) return;
+    const close = () => { setPosition(null); };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [position]);
+  const color = {
+    default: "text-muted-foreground hover:text-foreground",
+    danger: "text-red-600 dark:text-red-400",
+    warning: "text-amber-700 dark:text-amber-400",
+  }[tone];
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={label}
+        aria-describedby={position ? tooltipId : undefined}
+        aria-busy={busy || undefined}
+        disabled={disabled}
+        onMouseEnter={showTooltip}
+        onMouseLeave={() => { setPosition(null); }}
+        onFocus={showTooltip}
+        onBlur={() => { setPosition(null); }}
+        onKeyDown={(event) => { if (event.key === "Escape") setPosition(null); }}
+        onClick={() => { setPosition(null); onClick(); }}
+        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${color}`}
+      >
+        {busy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Icon className="h-4 w-4" aria-hidden="true" />}
+      </button>
+      {position && createPortal(
+        <div id={tooltipId} role="tooltip" style={position} className="pointer-events-none fixed z-50 rounded border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-sm">
+          {label}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 };
 
 // ---- Service Picker ----
@@ -645,18 +703,19 @@ const DashboardView = () => {
                   {isColumnVisible("route") && <RouteCell route={draft} editing={isEditing} onChange={(patch) => { updateDraft(draftKey, initial, patch); }} />}
                   {/* Actions */}
                   {isColumnVisible("actions") && (
-                    <td className="sticky right-0 w-44 min-w-44 bg-background px-3 py-1.5 align-top">
+                    <td className="sticky right-0 w-44 min-w-44 bg-background px-2 py-1.5 align-top">
                         {tunnel ? (
-                          <div className="flex flex-wrap gap-1">
+                          <div className="flex items-center gap-0.5">
                           {isEditing ? (
-                            <Btn onClick={() => saveRoute(draftKey, tunnel.tunnel_id, initial.service, draft)} disabled={isSaving} variant="primary">{isSaving ? "Saving..." : "Save"}</Btn>
+                            <ActionIcon label={isSaving ? "Saving route" : "Save route"} icon={Check} busy={isSaving} disabled={isSaving} onClick={() => { saveRoute(draftKey, tunnel.tunnel_id, initial.service, draft); }} />
                           ) : (
-                            <Btn onClick={() => startEditing(draftKey)} variant="ghost">Edit</Btn>
+                            <ActionIcon label="Edit route" icon={Pencil} onClick={() => { startEditing(draftKey); }} />
                           )}
-                          <Btn onClick={() => deleteRoute(draftKey, tunnel.tunnel_id, initial.service)} disabled={isSaving} variant="danger">Delete Route</Btn>
-                          <Btn onClick={() => void handleExport(tunnel.tunnel_id)} variant="ghost">Export</Btn>
-                          <Btn onClick={() => refreshTunnelMut.mutate(tunnel.tunnel_id)} disabled={refreshTunnelMut.isPending} variant="ghost">{refreshTunnelMut.isPending ? "Refreshing..." : "Refresh"}</Btn>
-                          <Btn onClick={() => setConfirmRecreate(tunnel.tunnel_id)} variant="ghost">Recreate</Btn>
+                          <ActionIcon label="Delete route" icon={Trash2} tone="danger" disabled={isSaving} onClick={() => { deleteRoute(draftKey, tunnel.tunnel_id, initial.service); }} />
+                          <span className="mx-0.5 h-4 border-l" aria-hidden="true" />
+                          <ActionIcon label="Export tunnel configuration" icon={Download} onClick={() => { void handleExport(tunnel.tunnel_id); }} />
+                          <ActionIcon label={refreshTunnelMut.isPending ? "Refreshing tunnel status" : "Refresh tunnel status"} icon={RefreshCw} busy={refreshTunnelMut.isPending} disabled={refreshTunnelMut.isPending} onClick={() => { refreshTunnelMut.mutate(tunnel.tunnel_id); }} />
+                          <ActionIcon label="Recreate tunnel" icon={RotateCcw} tone="warning" onClick={() => { setConfirmRecreate(tunnel.tunnel_id); }} />
                         </div>
                       ) : <span className="text-xs text-muted-foreground">-</span>}
                     </td>
@@ -678,7 +737,7 @@ const DashboardView = () => {
                     {isColumnVisible("service") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("ports") && <td className="px-3 py-1.5 text-xs text-muted-foreground">-</td>}
                     {isColumnVisible("route") && <td className="px-3 py-1.5 text-xs italic text-muted-foreground">no routes</td>}
-                    {isColumnVisible("actions") && <td className="sticky right-0 w-44 min-w-44 bg-background px-3 py-1.5">
+                    {isColumnVisible("actions") && <td className="sticky right-0 w-44 min-w-44 bg-background px-2 py-1.5">
                       <span className="text-xs text-muted-foreground">-</span>
                     </td>}
                   </tr>
@@ -703,14 +762,14 @@ const DashboardView = () => {
                   {isColumnVisible("ports") && <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">{r.service.includes(":") ? r.service.split(":").pop()?.split("/")[0] : "-"}</td>}
                   {isColumnVisible("route") && <RouteCell route={draft} editing={isEditing} onChange={(patch) => { updateDraft(draftKey, initial, patch); }} />}
                   {isColumnVisible("actions") && (
-                    <td className="sticky right-0 w-44 min-w-44 bg-background px-3 py-1.5 align-top">
-                      <div className="flex flex-wrap gap-1">
+                    <td className="sticky right-0 w-44 min-w-44 bg-background px-2 py-1.5 align-top">
+                      <div className="flex items-center gap-0.5">
                         {isEditing ? (
-                          <Btn onClick={() => saveRoute(draftKey, t.tunnel_id, initial.service, draft)} disabled={isSaving} variant="primary">{isSaving ? "Saving..." : "Save"}</Btn>
+                          <ActionIcon label={isSaving ? "Saving route" : "Save route"} icon={Check} busy={isSaving} disabled={isSaving} onClick={() => { saveRoute(draftKey, t.tunnel_id, initial.service, draft); }} />
                         ) : (
-                          <Btn onClick={() => startEditing(draftKey)} variant="ghost">Edit</Btn>
+                          <ActionIcon label="Edit route" icon={Pencil} onClick={() => { startEditing(draftKey); }} />
                         )}
-                        <Btn onClick={() => deleteRoute(draftKey, t.tunnel_id, initial.service)} disabled={isSaving} variant="danger">Delete Route</Btn>
+                        <ActionIcon label="Delete route" icon={Trash2} tone="danger" disabled={isSaving} onClick={() => { deleteRoute(draftKey, t.tunnel_id, initial.service); }} />
                       </div>
                     </td>
                   )}
