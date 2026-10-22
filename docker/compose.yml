@@ -46,7 +46,7 @@ services:
       DOCKFLARE_BASIC_AUTH_USER: ${DOCKFLARE_BASIC_AUTH_USER:?DOCKFLARE_BASIC_AUTH_USER must be set}
       DOCKFLARE_BASIC_AUTH_PASSWORD: ${DOCKFLARE_BASIC_AUTH_PASSWORD:?DOCKFLARE_BASIC_AUTH_PASSWORD must be set}
     ports:
-      - "8088:80"
+      - "${DOCKFLARE_BIND_ADDRESS:-127.0.0.1}:8088:80"
     networks:
       - internal
     depends_on:
