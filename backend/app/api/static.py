@@ -17,7 +17,7 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 async def serve_spa(request: Request, full_path: str) -> Response:
     """Serve static files, falling back to index.html for SPA routing."""
     # Don't intercept API or WebSocket routes
-    if full_path.startswith("api/") or full_path.startswith("ws"):
+    if full_path == "openapi.json" or full_path.startswith("api/") or full_path.startswith("ws"):
         return HTMLResponse(status_code=404, content='{"detail":"Not found"}')
 
     file_path = STATIC_DIR / full_path
