@@ -48,6 +48,8 @@ if name == "npm":
     Path("package-lock.json").write_text(json.dumps({"name": manifest["name"]}))
 with open(os.environ["DEPLOY_TEST_LOG"], "a") as log:
     log.write(json.dumps(entry) + "\n")
+if name == "ssh" and any(arg.startswith("test -f ") for arg in args):
+    sys.exit(0 if os.environ.get("DEPLOY_TEST_EXISTING_ENV") else 1)
 if os.environ.get("DEPLOY_TEST_FAIL") == name:
     sys.exit(1)
 """
@@ -174,7 +176,16 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(next(c for c in calls if c["command"] == "rsync")["marker"], "new-dev")
         build = next(c for c in calls if "script" in c)
         self.assertEqual(
-            build["args"], ["m@192.168.0.161", "bash", "-s", "/srv/dockflare", "frontend"]
+            build["args"],
+            [
+                "m@192.168.0.161",
+                "bash",
+                "-s",
+                "/srv/dockflare",
+                "frontend",
+                "192.168.0.161",
+                self.git(self.seed, "rev-parse", "HEAD"),
+            ],
         )
         self.assertIn('$COMPOSE build "$COMPONENT"', build["script"])
         self.assertIn(self.git(self.seed, "rev-parse", "HEAD"), result.stdout)
@@ -182,7 +193,19 @@ class DeployTests(unittest.TestCase):
     def test_full_deploy_uses_all_services(self):
         result, calls = self.run_deploy("--dev")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(next(c for c in calls if "script" in c)["args"][-1], "all")
+        self.assertEqual(next(c for c in calls if "script" in c)["args"][4], "all")
+
+    def test_existing_server_secrets_are_not_overwritten(self):
+        self.env["DEPLOY_TEST_EXISTING_ENV"] = "1"
+        result, calls = self.run_deploy("--dev")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(c["command"] == "scp" for c in calls))
+        self.assertIn("Preserving existing server .env", result.stdout)
+        build = next(c["script"] for c in calls if "script" in c)
+        self.assertIn("python -m app.deploy_https", build)
+        self.assertIn("--profile https up -d cloudflared", build)
+        self.assertIn("https://", build)
+        self.assertNotIn("logs -f", build)
 
     def test_conflicting_flags_fail_before_remote_access(self):
         for flags in (("--dev", "--main"), ("--main", "--dev")):
