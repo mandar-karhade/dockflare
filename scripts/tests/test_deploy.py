@@ -29,6 +29,9 @@ import sys
 name = Path(sys.argv[0]).name
 args = sys.argv[1:]
 entry = {"command": name, "args": args}
+# Real SSH consumes stdin unless detached; preserve confirmation for deploy.sh.
+if name == "ssh" and "-n" not in args and not ("bash" in args and "-s" in args):
+    sys.stdin.read()
 if name == "ssh" and "bash" in args and "-s" in args:
     entry["script"] = sys.stdin.read()
 if name == "ssh" and any("printf %s" in arg for arg in args):

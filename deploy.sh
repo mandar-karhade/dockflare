@@ -121,7 +121,7 @@ resolve_default_app_dir() {
     return
   fi
 
-  REMOTE_HOME="$(ssh "$DEPLOY_HOST" 'printf %s "$HOME"')" \
+  REMOTE_HOME="$(ssh -n "$DEPLOY_HOST" 'printf %s "$HOME"')" \
     || err "Cannot resolve remote home directory on $DEPLOY_HOST."
   [ -n "$REMOTE_HOME" ] || err "Remote home directory is empty on $DEPLOY_HOST."
   DEPLOY_APP_DIR="$REMOTE_HOME/dockflare"
@@ -213,7 +213,7 @@ if [ ! -f "$SOURCE_DIR/frontend/package-lock.json" ]; then
     || err "Could not prepare the frontend lockfile; nothing was deployed."
 fi
 
-ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEPLOY_HOST" "echo ok" >/dev/null 2>&1 \
+ssh -n -o ConnectTimeout=5 -o BatchMode=yes "$DEPLOY_HOST" "echo ok" >/dev/null 2>&1 \
   || err "Cannot SSH into $DEPLOY_HOST (key auth, host reachable?)."
 log "SSH OK."
 resolve_default_app_dir
