@@ -205,10 +205,50 @@ class DeployTests(unittest.TestCase):
         self.assertFalse(any(c["command"] == "scp" for c in calls))
         self.assertIn("Preserving existing server .env", result.stdout)
         build = next(c["script"] for c in calls if "script" in c)
-        self.assertIn("python -m app.deploy_https", build)
+        self.assertIn("exec -T --interactive=false backend python -m app.deploy_https", build)
         self.assertIn("--profile https up -d cloudflared", build)
         self.assertIn("https://", build)
         self.assertNotIn("logs -f", build)
+
+    def test_remote_script_reaches_connector_and_completion_with_real_stdin(self):
+        result, calls = self.run_deploy("--dev")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        script = next(c["script"] for c in calls if "script" in c)
+        app = self.root / "remote-app"
+        app.mkdir()
+        (app / ".env").write_text("CF_TOKEN=test\n")
+        docker = self.bin / "docker"
+        docker.write_text(
+            f"#!{sys.executable}\n"
+            + r"""import sys
+from pathlib import Path
+args = sys.argv[1:]
+if "exec" in args and "app.deploy_https" in args:
+    if "--interactive=false" not in args:
+        sys.stdin.read()
+    print("dockflare-152-abcd-70.abbrv8.com")
+elif "cp" in args:
+    Path(".https-tunnel.env").write_text("TUNNEL_TOKEN=test\n")
+elif "exec" in args:
+    sys.stdin.read()
+    print("HTTPS verified")
+elif "cloudflared" in args:
+    Path("connector-started").touch()
+"""
+        )
+        docker.chmod(0o755)
+        remote = subprocess.run(
+            ["bash", "-s", str(app), "all", "152.53.135.70", "release-commit"],
+            input=script,
+            capture_output=True,
+            text=True,
+            env=self.env,
+            timeout=10,
+        )
+        self.assertEqual(remote.returncode, 0, remote.stderr)
+        self.assertTrue((app / "connector-started").exists())
+        self.assertIn("HTTPS verified", remote.stdout)
+        self.assertEqual((app / ".deployed-revision").read_text(), "release-commit\n")
 
     def test_conflicting_flags_fail_before_remote_access(self):
         for flags in (("--dev", "--main"), ("--main", "--dev")):
