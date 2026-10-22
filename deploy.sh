@@ -5,7 +5,7 @@ set -euo pipefail
 # deploy.sh — Deploy Dockflare to a remote host via rsync + Docker Compose.
 #
 # Run from your dev machine (Mac/Linux). Fetches main (or dev) from origin,
-# rsyncs a clean snapshot, ships the local .env, builds and starts the stack.
+# rsyncs a clean snapshot, preserves server config, and provisions HTTPS.
 #
 # Usage:
 #   ./deploy.sh                  # Deploy origin/main (default)
@@ -51,7 +51,9 @@ Options:
   -h, --help         Show this help
 
 Only committed, pushed code from the selected origin branch is deployed.
-Your current branch and local edits are left untouched. The local .env is reused.
+Your current branch and local edits are left untouched. Existing remote .env is preserved.
+The local .env is used only on a new server. Each target must use an IPv4 address.
+A persistent dockflare-FIRST-xxxx-LAST.abbrv8.com URL is provisioned automatically.
 If the selected branch lacks frontend/package-lock.json, npm is required locally
 and generates the lockfile from that branch's package.json in a temporary directory.
 EOF
@@ -243,6 +245,7 @@ rsync -avz --delete \
   --exclude='__pycache__/' \
   --exclude='*.pyc' \
   --exclude='.env' \
+  --exclude='.https-tunnel.env' \
   --exclude='.DS_Store' \
   --exclude='backend/data/' \
   --exclude='backend/tm.db*' \
@@ -271,8 +274,19 @@ rsync -avz --delete \
 log "Rsync done (origin/$DEPLOY_BRANCH at $DEPLOY_COMMIT)."
 
 # ---- Ship .env separately ----------------------------------------------
-log "Deploying .env..."
-scp "$SCRIPT_DIR/.env" "$DEPLOY_HOST:$DEPLOY_APP_DIR/.env"
+if ssh "$DEPLOY_HOST" "test -f '$DEPLOY_APP_DIR/.env'"; then
+  log "Preserving existing server .env."
+else
+  scp "$SCRIPT_DIR/.env" "$DEPLOY_HOST:$DEPLOY_APP_DIR/.env.bootstrap"
+  ssh "$DEPLOY_HOST" "umask 077; if [ ! -f '$DEPLOY_APP_DIR/.env' ]; then
+    if ! grep -q '^TM_MASTER_KEY_HEX=' '$DEPLOY_APP_DIR/.env.bootstrap'; then
+      printf '\\nTM_MASTER_KEY_HEX=' >> '$DEPLOY_APP_DIR/.env.bootstrap'
+      openssl rand -hex 32 >> '$DEPLOY_APP_DIR/.env.bootstrap'
+    fi
+    chmod 600 '$DEPLOY_APP_DIR/.env.bootstrap'
+    mv '$DEPLOY_APP_DIR/.env.bootstrap' '$DEPLOY_APP_DIR/.env'
+  fi"
+fi
 
 if [ "$MODE" = "sync-only" ]; then
   log "Sync-only — skipping build."
@@ -281,29 +295,55 @@ fi
 
 # ---- Remote build + up -------------------------------------------------
 log "Remote build & up..."
-ssh "$DEPLOY_HOST" bash -s "$DEPLOY_APP_DIR" "${COMPONENT:-all}" << 'REMOTE_SCRIPT'
+ssh "$DEPLOY_HOST" bash -s "$DEPLOY_APP_DIR" "${COMPONENT:-all}" "${DEPLOY_HOST#*@}" "$DEPLOY_COMMIT" << 'REMOTE_SCRIPT'
   set -euo pipefail
-  APP_DIR="$1"; COMPONENT="$2"
+  APP_DIR="$1"; COMPONENT="$2"; SERVER_IP="$3"; COMMIT="$4"
   cd "$APP_DIR"
-  set -a; source .env; set +a
-
-  COMPOSE="docker compose -f docker/compose.yml"
+  chmod 600 .env
+  COMPOSE="docker compose --env-file .env -f docker/compose.yml"
 
   if [ "$COMPONENT" != "all" ]; then
     $COMPOSE build "$COMPONENT"
-    $COMPOSE up -d --force-recreate "$COMPONENT"
+    $COMPOSE up -d --wait --wait-timeout 120 "$COMPONENT"
   else
-    $COMPOSE build
-    $COMPOSE up -d
+    $COMPOSE build backend frontend
+    $COMPOSE up -d --wait --wait-timeout 120 backend frontend
   fi
-  sleep 3
-  $COMPOSE ps
+
+  HOSTNAME="$($COMPOSE exec -T backend python -m app.deploy_https "$SERVER_IP")"
+  $COMPOSE cp backend:/app/data/.https-tunnel.env .https-tunnel.env
+  chmod 600 .https-tunnel.env
+  $COMPOSE --profile https up -d cloudflared
+
+  # Verify TLS, authentication and the public API before reporting success.
+  $COMPOSE exec -T backend python - "$HOSTNAME" <<'VERIFY_HTTPS'
+import sys
+import time
+import httpx
+from app.config import Settings
+
+hostname = sys.argv[1]
+settings = Settings()
+with httpx.Client(timeout=10) as client:
+    for attempt in range(30):
+        try:
+            base = "https://" + hostname
+            assert client.get(base).status_code == 401
+            auth = (settings.basic_auth_user, settings.basic_auth_password)
+            assert client.get(base, auth=auth).status_code == 200
+            assert client.get(base + "/api/v1/health", auth=auth).json() == {"status": "ok"}
+            redirect = client.get("http://" + hostname)
+            assert redirect.status_code in (301, 302, 307, 308)
+            assert redirect.headers["location"].startswith(base)
+            break
+        except (httpx.HTTPError, AssertionError, ValueError):
+            if attempt == 29:
+                raise
+            time.sleep(2)
+print("  UI: https://" + hostname)
+VERIFY_HTTPS
+  printf '%s\n' "$COMMIT" > .deployed-revision
+  $COMPOSE --profile https ps
 REMOTE_SCRIPT
 
-REMOTE_IP="${DEPLOY_HOST#*@}"
-echo ""
 log "Deployment done (origin/$DEPLOY_BRANCH at $DEPLOY_COMMIT)."
-echo "  UI: http://$REMOTE_IP:8088"
-echo ""
-log "Streaming backend logs (Ctrl+C to stop — containers keep running)..."
-ssh "$DEPLOY_HOST" "cd '$DEPLOY_APP_DIR' && set -a && source .env && docker compose -f docker/compose.yml logs -f --tail=30 backend"
