@@ -103,6 +103,11 @@ DOCKFLARE_BASIC_AUTH_PASSWORD=change_me_to_a_long_random_password
 ```
 
 The Docker deployment serves the frontend and API through nginx with HTTP Basic Auth.
+Port 8088 binds to `127.0.0.1` by default. Use a Cloudflare Tunnel pointing to
+`http://frontend:80` on the Compose network for HTTPS access, or use
+`ssh -L 8088:127.0.0.1:8088 user@server` for local access.
+Requests forwarded by Cloudflare over HTTP redirect to HTTPS.
+Set `DOCKFLARE_BIND_ADDRESS` explicitly if a different host binding is required.
 Only localhost, private RFC1918 networks, `98.40.139.139`, and `2601:2c3:c37e:7c50:145e:92ce:290a:1ba2` are allowed through the reverse proxy.
 
 ### 3. Run setup
