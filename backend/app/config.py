@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 DEFAULT_CLOUDFLARED_IMAGE = "cloudflare/cloudflared:2026.8.3"
@@ -21,6 +22,15 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"  # noqa: S104
     port: int = 8088
     log_level: str = "info"
+
+    basic_auth_user: str = Field(
+        default="",
+        validation_alias=AliasChoices("TM_BASIC_AUTH_USER", "DOCKFLARE_BASIC_AUTH_USER"),
+    )
+    basic_auth_password: str = Field(
+        default="",
+        validation_alias=AliasChoices("TM_BASIC_AUTH_PASSWORD", "DOCKFLARE_BASIC_AUTH_PASSWORD"),
+    )
 
     # Database
     db_path: str = "tm.db"

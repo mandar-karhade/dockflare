@@ -9,7 +9,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.middleware import RequestIDMiddleware
+from app.api.middleware import BasicAuthMiddleware, RequestIDMiddleware
 from app.api.static import router as static_router
 from app.api.v1.router import api_router
 from app.config import Settings
@@ -36,6 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
+        openapi_url="/api/openapi.json" if settings.debug else None,
         docs_url="/api/docs" if settings.debug else None,
         redoc_url="/api/redoc" if settings.debug else None,
         lifespan=lifespan,
@@ -45,6 +46,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Middleware (order matters — outermost first)
     app.add_middleware(RequestIDMiddleware)
+    if settings.basic_auth_user and settings.basic_auth_password:
+        app.add_middleware(
+            BasicAuthMiddleware,
+            username=settings.basic_auth_user,
+            password=settings.basic_auth_password,
+            exempt_paths={"/api/v1/health"},
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
