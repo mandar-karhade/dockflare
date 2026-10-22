@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.27",
     "docker>=7.1",
     "cryptography>=43",
+    "greenlet>=3.0",
     "apscheduler>=3.10",
     "tenacity>=9",
     "structlog>=24",
