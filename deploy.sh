@@ -310,7 +310,7 @@ ssh "$DEPLOY_HOST" bash -s "$DEPLOY_APP_DIR" "${COMPONENT:-all}" "${DEPLOY_HOST#
     $COMPOSE up -d --wait --wait-timeout 120 backend frontend
   fi
 
-  HOSTNAME="$($COMPOSE exec -T backend python -m app.deploy_https "$SERVER_IP")"
+  HOSTNAME="$($COMPOSE exec -T --interactive=false backend python -m app.deploy_https "$SERVER_IP")"
   $COMPOSE cp backend:/app/data/.https-tunnel.env .https-tunnel.env
   chmod 600 .https-tunnel.env
   $COMPOSE --profile https up -d cloudflared
