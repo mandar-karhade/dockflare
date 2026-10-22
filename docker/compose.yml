@@ -52,6 +52,19 @@ services:
     depends_on:
       - backend
 
+  cloudflared:
+    image: ${TM_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.8.3}
+    profiles: [https]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    env_file:
+      - path: ../.https-tunnel.env
+        required: false
+    networks:
+      - internal
+    depends_on:
+      - frontend
+
 volumes:
   backend-data:
 

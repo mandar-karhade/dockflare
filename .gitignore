@@ -65,3 +65,7 @@ backend/alembic/versions/__pycache__/
 # Misc
 /tmp/
 nohup.out
+
+.https-tunnel.env
+.env.bootstrap
+.deployed-revision

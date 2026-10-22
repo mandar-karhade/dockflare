@@ -230,3 +230,26 @@ MIT
 ### Application version
 
 The header displays Dockflare's version beside its name and connection status, using `major.minor.patch` format (currently `0.1.0`). It is read from `frontend/package.json` at build time, so rebuild the frontend when changing the version. Keep the frontend package version, Python project version in `pyproject.toml`, and FastAPI version in `backend/app/main.py` aligned when making a release.
+
+## Deploy with an automatic HTTPS URL
+
+Run `./deploy.sh --host user@SERVER_IPV4` (optionally `--app-dir /existing/path`).
+The deployment creates a hostname such as `dockflare-152-abcd-70.abbrv8.com`:
+the first and last octets come from the target IPv4, and four random lowercase
+letters avoid hostname collisions. The domain is always `abbrv8.com`.
+
+The hostname and tunnel ID are saved in `deployment-https.json` inside the
+backend data volume. Redeploying the same target reuses them; changing the target
+IP creates a new identity. Keep the data volume when upgrading. Old hostnames,
+DNS records and tunnels are never automatically deleted; cleanup is manual.
+
+The existing server `.env` is preserved. On a new server the local `.env` seeds
+the configuration, with a fresh encryption key if none was specified. The
+Cloudflare token must access `abbrv8.com` and allow tunnel editing and DNS editing.
+The connector runs as the Compose `cloudflared` service in the `https` profile.
+Its token is stored in `.https-tunnel.env` with mode 600, outside Git. Existing
+standalone tunnel connectors are left untouched.
+
+A deployment succeeds only after the containers are healthy and its public URL
+passes TLS, authentication, API health and HTTP-to-HTTPS redirect checks. It prints
+the HTTPS URL and exits. `--sync-only` does not provision or start the tunnel.
